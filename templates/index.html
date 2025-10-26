@@ -9,29 +9,29 @@
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
 
   <!-- [CSS LINK] -->
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
 
 <body>
 
   <!-- ========================================= -->
-<!-- [HEADER / NAVIGATION SECTION] -->
-<!-- ========================================= -->
-<header class="topbar">
-  <div class="wrap">
-    <a class="brand" href="index.html">
-      <img class="logo" src="images/logo.png" alt="Omen logo" />
-      <span class="brand-text">OMEN ASTROLOGY</span>
-    </a>
-    <nav class="nav">
-      <a href="index.html">HOME</a>
-      <a href="about.html">About</a>
-      <a href="readings.html">Readings</a>
-      <a href="booking.html">Booking</a>
-      <a href="contact.html">CONTACT</a>
-    </nav>
-  </div>
-</header>
+  <!-- [HEADER / NAVIGATION SECTION] -->
+  <!-- ========================================= -->
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="{{ url_for('home') }}">
+        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
+        <span class="brand-text">OMEN ASTROLOGY</span>
+      </a>
+      <nav class="nav">
+        <a href="{{ url_for('home') }}">HOME</a>
+        <a href="{{ url_for('about') }}">About</a>
+        <a href="{{ url_for('readings') }}">Readings</a>
+        <a href="{{ url_for('booking') }}">Booking</a>
+        <a href="{{ url_for('contact') }}">CONTACT</a>
+      </nav>
+    </div>
+  </header>
 
 
   <!-- ========================================= -->
@@ -102,28 +102,30 @@
   <!-- ========================================= -->
   <section class="section home-readings">
     <div class="wrap cards-grid">
-      <a class="card" href="readings.html#natal">
+      <a class="card" href="{{ url_for('readings') }}#natal">
         <h3 class="card-title">Natal Reading</h3>
-        <p class="card-text">Your core nature, talents, and current focus. Clear, written guidance.</p>
+        <p class="card-text">Your core nature, talents, and current focus.</p>
         <span class="card-link">Learn more →</span>
       </a>
-      <a class="card" href="readings.html#horary">
+      <a class="card" href="{{ url_for('readings') }}#horary">
         <h3 class="card-title">Horary Question</h3>
-        <p class="card-text">A focused answer to one clear question - love, work, or decisions.</p>
+        <p class="card-text">A focused answer to one clear question.</p>
         <span class="card-link">Learn more →</span>
       </a>
-      <a class="card" href="readings.html#relationship">
+      <a class="card" href="{{ url_for('readings') }}#relationship">
         <h3 class="card-title">Relationship Reading</h3>
         <p class="card-text">Understand deeper dynamics between two people.</p>
         <span class="card-link">Learn more →</span>
       </a>
-      <a class="card" href="readings.html#yearly">
+      <a class="card" href="{{ url_for('readings') }}#yearly">
         <h3 class="card-title">Yearly Outlook</h3>
-        <p class="card-text">Active Houses this year, key lessons, and windows of ease or stress.</p>
+        <p class="card-text">Active Houses this year; key windows.</p>
         <span class="card-link">Learn more →</span>
       </a>
     </div>
   </section>
+
+
 
   <!-- ========================================= -->
   <!-- [HOME - HOW IT WORKS SECTION] -->

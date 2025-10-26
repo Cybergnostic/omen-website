@@ -6,23 +6,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Contact - Omen Astrology</title>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
 <body>
 
+  <!-- ========================================= -->
   <!-- [HEADER / NAVIGATION SECTION] -->
+  <!-- ========================================= -->
   <header class="topbar">
     <div class="wrap">
-      <a class="brand" href="index.html">
-        <img class="logo" src="images/logo.png" alt="Omen logo" />
+      <a class="brand" href="{{ url_for('home') }}">
+        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
         <span class="brand-text">OMEN ASTROLOGY</span>
       </a>
       <nav class="nav">
-        <a href="index.html">HOME</a>
-        <a href="about.html">About</a>
-        <a href="readings.html">Readings</a>
-        <a href="booking.html">Booking</a>
-        <a href="contact.html" aria-current="page">CONTACT</a>
+        <a href="{{ url_for('home') }}">HOME</a>
+        <a href="{{ url_for('about') }}">About</a>
+        <a href="{{ url_for('readings') }}">Readings</a>
+        <a href="{{ url_for('booking') }}">Booking</a>
+        <a href="{{ url_for('contact') }}">CONTACT</a>
       </nav>
     </div>
   </header>
