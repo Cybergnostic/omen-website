@@ -1,1 +1,20 @@
+# venv / Python
 .venv/
+__pycache__/
+*.pyc
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# env / secrets
+.env
+
+# build/output (if any later)
+dist/
+build/
+
+# optional: comment out the next line if you WANT to sync bookings file
+# data/bookings.csv
