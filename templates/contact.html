@@ -1,7 +1,6 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <!-- [HEAD - META & CSS LINK] -->
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Contact - Omen Astrology</title>
@@ -10,9 +9,6 @@
 </head>
 <body>
 
-  <!-- ========================================= -->
-  <!-- [HEADER / NAVIGATION SECTION] -->
-  <!-- ========================================= -->
   <header class="topbar">
     <div class="wrap">
       <a class="brand" href="{{ url_for('home') }}">
@@ -23,43 +19,42 @@
         <a href="{{ url_for('home') }}">HOME</a>
         <a href="{{ url_for('about') }}">About</a>
         <a href="{{ url_for('readings') }}">Readings</a>
-        <a href="{{ url_for('booking') }}">Booking</a>
+        {% if cart_count > 0 %} 
+            <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a> 
+        {% endif %}
         <a href="{{ url_for('contact') }}">CONTACT</a>
       </nav>
     </div>
   </header>
 
-  <!-- ========================================= -->
-  <!-- [CONTACT - INFO SECTION] -->
-  <!-- ========================================= -->
   <section class="section contact-info">
     <div class="wrap text-col">
       <h1 class="h-title">Contact</h1>
-      <p>Questions before you book? Write to <strong>contact@omen.example</strong> and you’ll get a reply within 24 - 48 hours.</p>
-      <p>For bookings, please use the <a href="booking.html">Booking</a> page so I can track your request.</p>
+      <p>Questions before you book?
+        Write to <strong>contact@omen.example</strong> and you’ll get a reply within 24 - 48 hours.</p>
+      <p>For bookings, please use the <a href="{{ url_for('booking') }}">Booking</a> page so I can track your request.</p>
     </div>
   </section>
 
-  <!-- ========================================= -->
-  <!-- [CONTACT - SIMPLE FORM] -->
-  <!-- ========================================= -->
   <section class="section contact-form">
     <div class="wrap form-wrap">
-      <form class="form">
+      
+      <form class="form" action="{{ url_for('submit_contact') }}" method="post">
         <div class="form-row">
           <label>Name</label>
-          <input type="text" required>
+          <input type="text" name="name" required>
         </div>
         <div class="form-row">
           <label>Email</label>
-          <input type="email" required>
+          <input type="email" name="email" required>
         </div>
         <div class="form-row">
           <label>Message</label>
-          <textarea rows="6" required></textarea>
+          <textarea rows="6" name="message" required></textarea>
         </div>
         <button class="btn btn-primary" type="submit">Send</button>
       </form>
+      
     </div>
   </section>
 

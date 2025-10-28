@@ -8,6 +8,7 @@ __pycache__/
 Thumbs.db
 .idea/
 .vscode/
+.all_code.txt
 
 # env / secrets
 .env

@@ -1,7 +1,6 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <!-- [HEAD - META & CSS LINK] -->
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Readings & Prices - Omen Astrology</title>
@@ -10,9 +9,6 @@
 </head>
 <body>
 
-  <!-- ========================================= -->
-  <!-- [HEADER / NAVIGATION SECTION] -->
-  <!-- ========================================= -->
   <header class="topbar">
     <div class="wrap">
       <a class="brand" href="{{ url_for('home') }}">
@@ -23,15 +19,29 @@
         <a href="{{ url_for('home') }}">HOME</a>
         <a href="{{ url_for('about') }}">About</a>
         <a href="{{ url_for('readings') }}">Readings</a>
-        <a href="{{ url_for('booking') }}">Booking</a>
+        {% if cart_count > 0 %} 
+            <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a> 
+        {% endif %}
         <a href="{{ url_for('contact') }}">CONTACT</a>
       </nav>
     </div>
   </header>
 
-  <!-- ========================================= -->
-  <!-- [READINGS - INTRO SECTION] -->
-  <!-- ========================================= -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div id="flash-message-data" data-category="{{ category }}" data-message="{{ message }}" style="display: none;"></div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <div id="itemAddedNotification" class="notification-popup">
+      <span class="popup-icon">&#10003;</span>
+      <span id="popup-message">Item added to cart.</span>
+      <a href="{{ url_for('cart') }}" class="btn-sm btn-ghost">View Cart ({{ cart_count }})</a>
+  </div>
+
+
   <section class="section readings-intro">
     <div class="wrap text-col">
       <h1 class="h-title">Readings & Prices</h1>
@@ -39,69 +49,69 @@
     </div>
   </section>
 
-  <!-- ========================================= -->
-  <!-- [READINGS - OFFERINGS GRID] -->
-  <!-- ========================================= -->
   <section class="section readings-grid">
     <div class="wrap cards-grid">
 
-      <article id="natal" class="card pricing">
-        <h3 class="card-title">Natal Reading</h3>
-        <p class="card-text">Your core nature, talents, challenges, and current focus.</p>
-        <ul class="mini-list">
-          <li>Format: PDF + chat Q&A</li>
-          <li>Delivery: 3 - 7 days</li>
-        </ul>
-        <div class="price">€65</div>
-        <a class="btn btn-primary" href="{{ url_for('booking') }}">Order</a>
-      </article>
+      {% for key, reading in readings.items() %}
+      <article id="{{ key }}" class="card pricing">
+        <h3 class="card-title">{{ reading.name }}</h3>
+        <p class="card-text">
+          {% if key == 'natal' %}A full look at temperament, behavior, relationships, money, career, family/Home, study, travel, and current focus.
+          {% elif key == 'orientation' %}Strengths and work style, direction for study/work, and better timing for changes or new starts.
+          {% elif key == 'love' %}What is active now in love, patterns to watch, realistic next steps and timing.
+          {% elif key == 'focus' %}One area of life (family/Home, finances, health themes, relocation, studies, travel, etc.). Sharp, practical guidance.
+          {% elif key == 'annual' %}One year overview (birthday to birthday): active Houses, key months, and practical timing notes.
+          {% elif key == 'horary' %}For a single, clear question (work, money, love, moving, lost items, timing, etc.). Focused judgment and reasoning.
+          {% elif key == 'synastry' %}Two charts compared: how the bond works in practice – flow, friction, and where to invest effort.
+          {% endif %}
+        </p>
+        
+        <div class="btn-row dual">
+          <form action="{{ url_for('add_to_cart') }}" method="post" style="width: 50%;">
+            <input type="hidden" name="reading_type" value="{{ key }}">
+            <input type="hidden" name="reading_mode" value="pdf">
+            <button class="btn btn-primary" type="submit" style="width: 100%;">
+              PDF Report (€{{ reading.pdf_price }})
+            </button>
+          </form>
 
-      <article id="horary" class="card pricing">
-        <h3 class="card-title">Horary Question</h3>
-        <p class="card-text">A focused answer to one clear question - love, work, or decisions.</p>
-        <ul class="mini-list">
-          <li>Format: PDF + short explanation</li>
-          <li>Delivery: 1 - 3 days</li>
-        </ul>
-        <div class="price">€45</div>
-        <a class="btn btn-primary" href="{{ url_for('booking') }}">Order</a>
+          <form action="{{ url_for('add_to_cart') }}" method="post" style="width: 50%;">
+            <input type="hidden" name="reading_type" value="{{ key }}">
+            <input type="hidden" name="reading_mode" value="video">
+            <button class="btn btn-ghost" type="submit" style="width: 100%;">
+              Live Call (€{{ reading.video_price }})
+            </button>
+          </form>
+        </div>
       </article>
-
-      <article id="relationship" class="card pricing">
-        <h3 class="card-title">Relationship Reading</h3>
-        <p class="card-text">Deeper dynamics between two people; strengths and pressure points.</p>
-        <ul class="mini-list">
-          <li>Format: PDF + chat Q&A</li>
-          <li>Delivery: 5 - 10 days</li>
-        </ul>
-        <div class="price">€85</div>
-        <a class="btn btn-primary" href="{{ url_for('booking') }}">Order</a>
-      </article>
-
-      <article id="yearly" class="card pricing">
-        <h3 class="card-title">Yearly Outlook</h3>
-        <p class="card-text">Active Houses this year; key lessons and windows of ease or stress.</p>
-        <ul class="mini-list">
-          <li>Format: PDF + checklist</li>
-          <li>Delivery: 5 - 10 days</li>
-        </ul>
-        <div class="price">€75</div>
-        <a class="btn btn-primary" href="{{ url_for('booking') }}">Order</a>
-      </article>
-
-      <article id="live" class="card pricing">
-        <h3 class="card-title">Live Consultation (45 min)</h3>
-        <p class="card-text">Direct discussion of your chart and questions.</p>
-        <ul class="mini-list">
-          <li>Format: Video call + summary notes</li>
-        </ul>
-        <div class="price">€70</div>
-        <a class="btn btn-primary" href="{{ url_for('booking') }}">Book</a>
-      </article>
+      {% endfor %}
 
     </div>
   </section>
 
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const flashData = document.getElementById('flash-message-data');
+        const notification = document.getElementById('itemAddedNotification');
+        const popupMessage = document.getElementById('popup-message');
+
+        if (flashData && flashData.dataset.category === 'success') {
+            const message = flashData.dataset.message;
+            
+            // Check if the message is from the "Add to Cart" action
+            if (message.includes('added to cart')) {
+                // Update message and show popup
+                popupMessage.textContent = message;
+                notification.classList.add('show');
+
+                // Auto-hide after 3 seconds
+                setTimeout(() => {
+                    notification.classList.remove('show');
+                }, 3000);
+            }
+        }
+    });
+  </script>
 
 </body>
 </html>

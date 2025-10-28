@@ -1,19 +1,80 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Thank you - Omen</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Thank You - Omen Astrology</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
 </head>
+
 <body>
-  <!-- ========================================= -->
-  <!-- [THANK YOU - SIMPLE] -->
-  <!-- ========================================= -->
-  <section class="section">
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="{{ url_for('home') }}">
+        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
+        <span class="brand-text">OMEN ASTROLOGY</span>
+      </a>
+      <nav class="nav">
+        <a href="{{ url_for('home') }}">HOME</a>
+        <a href="{{ url_for('about') }}">About</a>
+        <a href="{{ url_for('readings') }}">Readings</a>
+        {% if cart_count > 0 %} 
+            <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a> 
+        {% endif %}
+        <a href="{{ url_for('contact') }}">CONTACT</a>
+      </nav>
+    </div>
+  </header>
+
+  <section class="section thankyou">
     <div class="wrap text-col">
-      <h1 class="h-title">Thank you</h1>
-      <p>Your request was received. You’ll get a reply shortly.</p>
-      <p><a class="btn btn-ghost" href="{{ url_for('home') }}">Back to Home</a></p>
+      {% if status == 'paid' %}
+        <h1 class="h-title" style="color: green;">Order Confirmed!</h1>
+        <p class="h-lede">
+          Thank you for your purchase. Your order details have been permanently recorded.
+        </p>
+        <p>
+          <strong>Order ID: {{ order_id }}</strong><br>
+          A confirmation will be sent to your email shortly.
+        </p>
+
+        {% if video_session_needed %}
+          <hr style="margin: 2rem 0;">
+          <div style="background: #f0f8ff; border: 1px solid #3b0e41; padding: 20px; border-radius: 5px;">
+            <h2 style="margin-top: 0; color: #3b0e41;">&#10003; Next Step: Schedule Your Consultation</h2>
+            <p>Your payment is complete, but you still need to book your time slot for the live video session(s).</p>
+            <a href="https://cal.com/omen-traditional-astrology-1fueeq" target="_blank" class="btn btn-primary" style="background: #3b0e41; color: white;">
+              Go to Cal.com to Schedule Now
+            </a>
+          </div>
+        {% else %}
+          <p style="margin-top: 2rem;">
+            For your PDF reading(s), please allow {{ "5-7" if order_id and not video_session_needed else "a few" }} days for delivery. You will receive the file via email.
+          </p>
+        {% endif %}
+
+      {% elif status == 'failed' %}
+        <h1 class="h-title" style="color: red;">Payment Failed</h1>
+        <p class="h-lede">
+          We were unable to process your payment. Please return to the cart and try again, or contact us if the issue persists.
+        </p>
+        <a href="{{ url_for('cart') }}" class="btn btn-secondary">Return to Cart</a>
+        
+      {% elif status == 'error' %}
+        <h1 class="h-title" style="color: red;">Order Error</h1>
+        <p class="h-lede">
+          An unexpected error occurred during the finalization of your order. Please contact us immediately with your order ID (if you have one).
+        </p>
+        <a href="{{ url_for('contact') }}" class="btn btn-secondary">Contact Support</a>
+        
+      {% else %}
+        <h1 class="h-title">Thank You!</h1>
+        <p class="h-lede">
+          Your message has been sent successfully, or you've completed a booking step. We appreciate you reaching out!
+        </p>
+      {% endif %}
+
     </div>
   </section>
 </body>

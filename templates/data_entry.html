@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Enter Chart Details - Omen Astrology</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+
+<body>
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="{{ url_for('home') }}">
+        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
+        <span class="brand-text">OMEN ASTROLOGY</span>
+      </a>
+      <nav class="nav">
+        <a href="{{ url_for('home') }}">HOME</a>
+        <a href="{{ url_for('about') }}">About</a>
+        <a href="{{ url_for('readings') }}">Readings</a>
+        {% if cart_count > 0 %} 
+            <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a> 
+        {% endif %}
+        <a href="{{ url_for('contact') }}">CONTACT</a>
+      </nav>
+    </div>
+  </header>
+
+  <section class="section">
+    <div class="wrap text-col">
+      <h1 class="h-title">1. Enter Order Details</h1>
+      <p class="h-lede">
+        We need your contact information and chart data. **This data is typically the same for all readings in your cart.** If you need a reading for a different person, please place a separate order.
+      </p>
+    </div>
+  </section>
+
+  <section class="section booking-form">
+    <div class="wrap form-wrap">
+      
+      <form id="dataEntryForm" action="{{ url_for('save_data') }}" method="post" class="form">
+        
+        <h2 style="color: #3b0e41;">Client Contact & Birth Data (Primary Person)</h2>
+        <p class="form-text" style="margin-top: 0;">* Required for all chart-based readings (Natal, Annual, etc.)</p>
+        
+        <div class="form-row grid2">
+          <div>
+            <label for="customerName">Full Name</label>
+            <input id="customerName" name="customer_name" type="text" 
+                   value="{{ customer_info.name or '' }}" required>
+           </div>
+          <div>
+            <label for="customerEmail">Email</label>
+            <input id="customerEmail" name="customer_email" type="email" 
+                   value="{{ customer_info.email or '' }}" required>
+          </div>
+        </div>
+
+        <div class="form-row grid2">
+          <div>
+            <label for="mainBirthDate">Date of Birth</label>
+             <input id="mainBirthDate" name="main_birth_date" type="date"
+                    value="{{ customer_info.birth_date or '' }}" required>
+          </div>
+          <div>
+            <label for="mainBirthTime">Time of Birth (if known)</label>
+            <input id="mainBirthTime" name="main_birth_time" type="time"
+                   value="{{ customer_info.birth_time or '' }}">
+          </div>
+        </div>
+
+        <div class="form-row">
+           <label for="mainBirthPlace">Place of Birth</label>
+          <input id="mainBirthPlace" name="main_birth_place" type="text" placeholder="City, Country"
+                 value="{{ customer_info.birth_place or '' }}" required>
+        </div>
+        
+        
+        <hr style="margin: 3rem 0;">
+
+        <div class="form-toggle-section">
+            <h2 style="color: #3b0e41;">Secondary Person's Data (Optional)</h2>
+            {% if synastry_in_cart %}
+                <p class="form-text" style="color:red; font-weight:bold;">* REQUIRED for Synastry Reading(s) in your cart.</p>
+            {% else %}
+                <p class="form-text">Optional: Only fill this out if your reading requires a second person's chart (e.g., relationship timing).</p>
+            {% endif %}
+            
+            <div class="form-row grid2">
+              <div>
+                <label for="secondaryBirthDate">Date of Birth (Secondary)</label>
+                 <input id="secondaryBirthDate" name="secondary_birth_date" type="date"
+                        value="{{ customer_info.secondary_birth_date or '' }}">
+              </div>
+              <div>
+                <label for="secondaryBirthTime">Time of Birth (Secondary)</label>
+                <input id="secondaryBirthTime" name="secondary_birth_time" type="time"
+                       value="{{ customer_info.secondary_birth_time or '' }}">
+              </div>
+            </div>
+
+            <div class="form-row">
+               <label for="secondaryBirthPlace">Place of Birth (Secondary)</label>
+              <input id="secondaryBirthPlace" name="secondary_birth_place" type="text" placeholder="City, Country"
+                     value="{{ customer_info.secondary_birth_place or '' }}">
+            </div>
+        </div>
+
+        <hr style="margin: 3rem 0;">
+
+        <h2 style="color: #3b0e41;">Reading-Specific Questions</h2>
+        <p class="form-text">* Please provide the focus or question for *each* reading in your cart.</p>
+
+        {% for item in cart_items %}
+        <div class="reading-details-block" style="border-left: 5px solid #666; padding-left: 20px; margin-bottom: 2.5rem;">
+            <h3 style="margin-top: 0;">{{ item.name }} ({{ item.reading_mode.capitalize() }})</h3>
+            
+            <div class="form-row">
+              <label for="question_{{ item.id }}">Your Question / Focus Area (Required for this reading)</label>
+              <textarea id="question_{{ item.id }}" name="question_{{ item.id }}" rows="4" required
+                        placeholder="What specific outcome or guidance are you seeking with this reading?">{{ cart_data.get(item.id, {}).question or '' }}</textarea>
+            </div>
+        </div>
+        {% endfor %}
+
+        <div class="btn-row" style="margin-top: 3rem;">
+          <button class="btn btn-primary" type="submit" style="width: 100%;">
+            Save Details & Go to Cart
+          </button>
+        </div>
+      </form>
+    </div>
+  </section>
+</body>
+</html>

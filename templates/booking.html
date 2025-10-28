@@ -1,18 +1,15 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <!-- [HEAD - META & CSS LINK] -->
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Booking - Omen Astrology</title>
+  <title>Order PDF Reading - Omen Astrology</title>
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+  <link rel="icon" href="{{ url_for('static', filename='images/logo.png') }}">
 </head>
-<body>
 
-  <!-- ========================================= -->
-  <!-- [HEADER / NAVIGATION SECTION] -->
-  <!-- ========================================= -->
+<body>
   <header class="topbar">
     <div class="wrap">
       <a class="brand" href="{{ url_for('home') }}">
@@ -23,93 +20,116 @@
         <a href="{{ url_for('home') }}">HOME</a>
         <a href="{{ url_for('about') }}">About</a>
         <a href="{{ url_for('readings') }}">Readings</a>
-        <a href="{{ url_for('booking') }}">Booking</a>
+        {% if cart_count > 0 %} 
+            <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a> 
+        {% endif %}
         <a href="{{ url_for('contact') }}">CONTACT</a>
       </nav>
     </div>
   </header>
 
-  <!-- ========================================= -->
-  <!-- [BOOKING - OPTIONS SECTION] -->
-  <!-- ========================================= -->
-  <section class="section booking-options">
+  <section class="section">
     <div class="wrap text-col">
-      <h1 class="h-title">Book a Reading</h1>
-      <p>Choose a live call or a written reading. For written readings, please fill in the form below.</p>
-      <div class="booking-buttons">
-        <a class="btn btn-primary" href="#">Book a Live Call</a>
-        <a class="btn btn-ghost" href="readings.html">See Readings</a>
-      </div>
+      <h1 class="h-title">Order PDF Reading</h1>
+      <p class="h-lede">Fill in your details below to order a written PDF reading. For live video consultations, please <a href="#live-sessions">book directly through Cal.com</a>.</p>
     </div>
   </section>
 
-  <!-- ========================================= -->
-    <!-- [BOOKING - FORM SECTION] -->
-    <!-- ========================================= -->
-    <section class="section booking-form">
+  <section id="form" class="section booking-form">
     <div class="wrap form-wrap">
-        <form class="form" action="{{ url_for('submit_booking') }}" method="POST">
+      <form action="{{ url_for('submit_booking') }}" method="post" class="form">
+        
         <div class="form-row">
-            <label>Full name</label>
-            <input type="text" name="name" required>
+          <label for="readingType">Reading Type</label>
+          <select id="readingType" name="reading" required>
+            <option value="natal"       {{ 'selected' if q_reading=='natal'       else '' }}>Natal Chart Analysis (€90)</option>
+            <option value="orientation" {{ 'selected' if q_reading=='orientation' else '' }}>Orientation / Career Guidance (€70)</option>
+            <option value="love"        {{ 'selected' if q_reading=='love'        else '' }}>Love &amp; Relationship Guidance (€70)</option>
+            <option value="focus"       {{ 'selected' if q_reading=='focus'       else '' }}>Other Focus Area (€60)</option>
+            <option value="annual"      {{ 'selected' if q_reading=='annual'      else '' }}>Annual Horoscope (€85)</option>
+            <option value="horary"      {{ 'selected' if q_reading=='horary'      else '' }}>Horary Chart Analysis (€55)</option>
+            <option value="synastry"    {{ 'selected' if q_reading=='synastry'    else '' }}>Synastry (€95)</option>
+          </select>
         </div>
-        <div class="form-row">
-            <label>Email</label>
-            <input type="email" name="email" required>
-        </div>
-        <div class="form-row">
-            <label>Reading type</label>
-            <select name="reading_type" required>
-            <option value="">Select…</option>
-            <option value="Natal Reading">Natal Reading</option>
-            <option value="Horary Question">Horary Question</option>
-            <option value="Relationship Reading">Relationship Reading</option>
-            <option value="Yearly Outlook">Yearly Outlook</option>
-            <option value="Live Consultation (45 min)">Live Consultation (45 min)</option>
-            </select>
-        </div>
-        <div class="form-row grid2">
-            <div>
-            <label>Birth date</label>
-            <input type="date" name="birth_date">
-            </div>
-            <div>
-            <label>Birth time (if known)</label>
-            <input type="time" name="birth_time">
-            </div>
-        </div>
-        <div class="form-row">
-            <label>Birth place (city, country)</label>
-            <input type="text" name="birth_place">
-        </div>
-        <div class="form-row">
-            <label>Your main question</label>
-            <textarea rows="5" name="question" placeholder="Be specific. What do you want to understand or decide?"></textarea>
-        </div>
-        <div class="form-row">
-            <label><input type="checkbox" name="agree" required> I agree to the Privacy & Terms</label>
-        </div>
-        <button class="btn btn-primary" type="submit">Send Request</button>
-        </form>
-    </div>
-    </section>
 
-    <!-- ========================================= -->
-    <!-- [BOOKING - THANK YOU MODAL] -->
-    <!-- ========================================= -->
-    <div id="thanks" class="modal" aria-labelledby="thanks-title" role="dialog" aria-modal="true">
-      <a class="modal__overlay" href="#"></a>
-      <div class="modal__card" role="document" tabindex="-1">
-        <h2 id="thanks-title" class="h-title">Thank you</h2>
-        <p>Your request was received. You’ll get a reply soon.</p>
-        <div class="modal__actions">
-          <a class="btn btn-primary" href="{{ url_for('home') }}">Back to Home</a>
-          <a class="btn btn-ghost" href="#">Close</a>
+        <div class="form-row grid2">
+          <div>
+            <label for="name">Full Name</label>
+            <input id="name" name="name" type="text" required>
+          </div>
+          <div>
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" required>
+          </div>
         </div>
+
+        <div class="form-row grid2">
+          <div>
+            <label for="birthDate">Date of Birth</label>
+            <input id="birthDate" name="birth_date" type="date">
+          </div>
+          <div>
+            <label for="birthTime">Time of Birth (if known)</label>
+            <input id="birthTime" name="birth_time" type="time">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <label for="birthPlace">Place of Birth</label>
+          <input id="birthPlace" name="birth_place" type="text" placeholder="City, Country">
+        </div>
+
+        <div class="form-row">
+          <label for="question">Notes / Focus Area</label>
+          <textarea id="question" name="question" rows="5" placeholder="Tell me what you want to focus on (optional)"></textarea>
+        </div>
+
+        <button class="btn btn-primary" type="submit">Submit Order</button>
+        
+        <p style="margin-top: 1rem; font-size: 14px; color: #666;">
+          You'll receive payment instructions via email within 24 hours.
+        </p>
+      </form>
+    </div>
+  </section>
+
+  <section id="live-sessions" class="section booking-options">
+    <div class="wrap text-col">
+      <h2 class="h-title">Live Video Consultations</h2>
+      <p>Prefer to speak directly? Book a live video consultation through Cal.com. Select your reading type below:</p>
+      
+      <div class="booking-buttons">
+        <a href="https://cal.com/omen-traditional-astrology-1fueeq/natal-chart-live-consultation" 
+           target="_blank" rel="noopener" class="btn btn-ghost">
+          Natal Chart Live (€90)
+        </a>
+        <a href="https://cal.com/omen-traditional-astrology-1fueeq/orientation-career-guidance-live-consultation" 
+           target="_blank" rel="noopener" class="btn btn-ghost">
+          Orientation / Career Live (€70)
+        </a>
+        <a href="https://cal.com/omen-traditional-astrology-1fueeq/love-relationship-guidance-live-consultation" 
+           target="_blank" rel="noopener" class="btn btn-ghost">
+          Love &amp; Relationship Live (€70)
+        </a>
+        <a href="https://cal.com/omen-traditional-astrology-1fueeq/other-focus-area-live-consultation" 
+           target="_blank" rel="noopener" class="btn btn-ghost">
+          Other Focus Area Live (€60)
+        </a>
+        <a href="https://cal.com/omen-traditional-astrology-1fueeq/annual-horoscope-solar-return-live-consultation" 
+           target="_blank" rel="noopener" class="btn btn-ghost">
+          Annual Horoscope Live (€85)
+        </a>
+        <a href="https://cal.com/omen-traditional-astrology-1fueeq/horary-chart-analysis-live-consultation" 
+           target="_blank" rel="noopener" class="btn btn-ghost">
+          Horary Live (€55)
+        </a>
+        <a href="https://cal.com/omen-traditional-astrology-1fueeq/synastry-live-consultation" 
+           target="_blank" rel="noopener" class="btn btn-ghost">
+          Synastry Live (€95)
+        </a>
       </div>
     </div>
-
-
+  </section>
 
 </body>
 </html>

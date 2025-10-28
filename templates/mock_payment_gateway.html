@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Payment Gateway Mock - Omen Astrology</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+
+<body>
+  <header class="topbar" style="background: #f7f7f7; border-bottom: 1px solid #ddd;">
+    <div class="wrap">
+      <span class="brand-text" style="color:#000;">[External Payment Gateway Mock]</span>
+    </div>
+  </header>
+
+  <section class="section" style="text-align: center;">
+    <div class="wrap form-wrap">
+      <h1 class="h-title" style="color: #3b0e41;">Secure Checkout</h1>
+      <p style="font-size: 1.2em; margin-bottom: 20px;">
+        Total Due: <strong>€{{ "%.2f" % total }}</strong>
+      </p>
+      <p>
+        <span style="font-size: 0.9em;">Order ID: {{ order_id }} | Email: {{ email }}</span>
+      </p>
+
+      <div class="form" style="max-width: 400px; margin: 2rem auto;">
+        
+        <p style="margin-bottom: 1.5rem; color: green; font-weight: bold;">
+          This simulates a secure hosted payment page (e.g., 2Checkout, Paddle, etc.).
+          No real payment will be processed.
+        </p>
+
+        <div class="form-row">
+          <label>Card Number</label>
+          <input type="text" value="XXXX XXXX XXXX 1234" disabled>
+        </div>
+        <div class="form-row">
+          <label>CVC / Expiry</label>
+          <input type="text" value="123 / 12/25" disabled>
+        </div>
+        
+        <a href="{{ success_url }}" class="btn btn-primary" style="width: 100%; margin-top: 1.5rem;">
+          Simulate Successful Payment
+        </a>
+        <a href="{{ fail_url }}" class="btn btn-ghost" style="width: 100%; margin-top: 1rem;">
+          Simulate Failed Payment
+        </a>
+      </div>
+      
+    </div>
+  </section>
+</body>
+</html>
