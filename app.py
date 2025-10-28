@@ -454,18 +454,18 @@ def submit_contact():
     email = request.form.get("email", "").strip()
     message = request.form.get("message", "").strip()
 
-    # Save a simple log so nothing is lost
-    from pathlib import Path
-    from datetime import datetime
-    Path(BASE_DIR / "data").mkdir(exist_ok=True)   # ensure /data exists
+    # Make sure data/ exists
+    Path(BASE_DIR / "data").mkdir(exist_ok=True)
 
-    with open(BASE_DIR / "data" / "contact_messages.csv", "a", encoding="utf-8") as f:
-        f.write(f'{datetime.utcnow().isoformat()},{name},{email},"{message.replace('"',"''")}"\n')
+    # Append a CSV row safely (handles quotes/commas)
+    import csv
+    with open(BASE_DIR / "data" / "contact_messages.csv", "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        from datetime import datetime
+        writer.writerow([datetime.utcnow().isoformat(), name, email, message])
 
-    # Optional: show a message and send user to Thank You (or back to Contact)
     flash("Thank you — your message was sent.", "success")
     return redirect(url_for("thankyou"))
-    # or: return redirect(url_for("contact"))
 
 if __name__ == "__main__":
     print(">>> Initializing database...")
