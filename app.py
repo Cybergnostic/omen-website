@@ -7,6 +7,7 @@ import uuid
 import csv # Keeping this import for contact form only
 
 # --- CONFIGURATION ---
+BASE_DIR = Path(__file__).resolve().parent
 DATABASE = 'data/omen_orders.db'
 # IMPORTANT: This secret key is for development only. Use a long, random key in production.
 app = Flask(
@@ -446,6 +447,25 @@ def clear_cart():
     session.modified = True
     flash('Your cart has been emptied.', 'success')
     return redirect(url_for("readings")) # Redirect them back to shopping
+
+@app.route("/submit_contact", methods=["POST"])
+def submit_contact():
+    name = request.form.get("name", "").strip()
+    email = request.form.get("email", "").strip()
+    message = request.form.get("message", "").strip()
+
+    # Save a simple log so nothing is lost
+    from pathlib import Path
+    from datetime import datetime
+    Path(BASE_DIR / "data").mkdir(exist_ok=True)   # ensure /data exists
+
+    with open(BASE_DIR / "data" / "contact_messages.csv", "a", encoding="utf-8") as f:
+        f.write(f'{datetime.utcnow().isoformat()},{name},{email},"{message.replace('"',"''")}"\n')
+
+    # Optional: show a message and send user to Thank You (or back to Contact)
+    flash("Thank you — your message was sent.", "success")
+    return redirect(url_for("thankyou"))
+    # or: return redirect(url_for("contact"))
 
 if __name__ == "__main__":
     print(">>> Initializing database...")
