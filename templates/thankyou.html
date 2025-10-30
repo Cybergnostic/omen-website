@@ -33,9 +33,9 @@
       {% elif status == 'failed' %}
         <h1 class="h-title" style="color: red;">Payment Failed</h1>
         <p class="h-lede">
-          We were unable to process your payment. Please return to the cart and try again, or contact us if the issue persists.
+          We were unable to process your payment. Please return and try again, or contact us if the issue persists.
         </p>
-        <a href="{{ url_for('cart') }}" class="btn btn-secondary">Return to Cart</a>
+        <a href="{{ url_for('readings') }}" class="btn btn-secondary">Back to Readings</a>
         
       {% elif status == 'error' %}
         <h1 class="h-title" style="color: red;">Order Error</h1>
@@ -47,7 +47,7 @@
       {% else %}
         <h1 class="h-title">Thank You!</h1>
         <p class="h-lede">
-          Your message has been sent successfully, or you've completed a booking step. We appreciate you reaching out!
+          Your message has been sent successfully, or you've completed a step. We appreciate you reaching out!
         </p>
       {% endif %}
 

@@ -8,9 +8,8 @@ import uuid # Still useful if we generate internal IDs, though not needed for ca
 import os
 import requests
 from flask.views import MethodView
-from flask_wtf.csrf import CSRFProtect, csrf_exempt
+from uuid import uuid4
 
-csrf = CSRFProtect(app)
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -42,12 +41,27 @@ def close_connection(exception):
     if db is not None:
         db.close()
 
+def migrate_orders_table(db):
+    cols = {r[1] for r in db.execute("PRAGMA table_info(orders)")}
+    def add(col, sql):
+        if col not in cols:
+            db.execute(sql)
+    add("order_id",        "ALTER TABLE orders ADD COLUMN order_id TEXT;")
+    add("paypal_order_id", "ALTER TABLE orders ADD COLUMN paypal_order_id TEXT;")
+    add("status",          "ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'created';")
+    add("created_at",      "ALTER TABLE orders ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP;")
+    add("captured_at",     "ALTER TABLE orders ADD COLUMN captured_at TEXT;")
+    add("reading",         "ALTER TABLE orders ADD COLUMN reading TEXT;")
+    add("mode",            "ALTER TABLE orders ADD COLUMN mode TEXT;")
+    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id);")
+    db.commit()
+
 def init_db():
-    """Initializes the database schema."""
+    """Initializes the database schema and migrates."""
     with app.app_context():
         db = get_db()
-        # The 'orders' table will store finalized, paid orders
-        db.execute("""
+        db.execute(
+            """
             CREATE TABLE IF NOT EXISTS orders (
                 order_id TEXT PRIMARY KEY,
                 timestamp TEXT NOT NULL,
@@ -61,12 +75,12 @@ def init_db():
                 birth_place TEXT,
                 secondary_birth_date TEXT,
                 secondary_birth_time TEXT,
-                secondary_birth_place TEXT,
-                UNIQUE (order_id)
+                secondary_birth_place TEXT
             );
-        """)
-        # The 'order_items' table stores the details of each reading in the order
-        db.execute("""
+            """
+        )
+        db.execute(
+            """
             CREATE TABLE IF NOT EXISTS order_items (
                 order_id TEXT NOT NULL,
                 item_id TEXT PRIMARY KEY,
@@ -76,7 +90,9 @@ def init_db():
                 question TEXT,
                 FOREIGN KEY (order_id) REFERENCES orders(order_id)
             );
-        """)
+            """
+        )
+        migrate_orders_table(db)
         db.commit()
 
 # --- INITIAL SETUP ---
@@ -96,29 +112,9 @@ READINGS = {
     "synastry": {"name": "Synastry", "pdf_price": 95, "video_price": 125},
 }
 
-# **ACTION REQUIRED: PASTE YOUR 14 PADDLE CHECKOUT LINKS HERE**
-PADDLE_LINKS = {
-    "natal_pdf":       "https://pay.paddle.com/checkout/purchase?price_id=pri_01k8qevj415818w1pdqpw16pn7", # Based on your image
-    "natal_call":      "https://pay.paddle.com/checkout/purchase?price_id=pri_01k8qf43yqv9w8jg3ta61h5cfy", # Based on your image
-    
-    "orientation_pdf": "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_ORIENTATION_PDF_PRICE_ID]",
-    "orientation_call": "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_ORIENTATION_CALL_PRICE_ID]",
-    
-    "love_pdf":        "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_LOVE_PDF_PRICE_ID]",
-    "love_call":       "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_LOVE_CALL_PRICE_ID]",
-    
-    "focus_pdf":       "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_FOCUS_PDF_PRICE_ID]",
-    "focus_call":      "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_FOCUS_CALL_PRICE_ID]",
-    
-    "annual_pdf":      "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_ANNUAL_PDF_PRICE_ID]",
-    "annual_call":     "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_ANNUAL_CALL_PRICE_ID]",
-    
-    "horary_pdf":      "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_HORARY_PDF_PRICE_ID]",
-    "horary_call":     "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_HORARY_CALL_PRICE_ID]",
-    
-    "synastry_pdf":    "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_SYNASTRY_PDF_PRICE_ID]",
-    "synastry_call":   "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_SYNASTRY_CALL_PRICE_ID]",
-}
+# Remove PADDLE_LINKS definition and all usage
+# PADDLE_LINKS = {...}
+# in /readings route and all others
 
 
 # --- BASIC PAGES ---
@@ -133,8 +129,8 @@ def about():
 
 @app.route("/readings")
 def readings():
-    # Pass both readings data and paddle links to the template
-    return render_template("readings.html", readings=READINGS, paddle_links=PADDLE_LINKS, cart_count=0)
+    # Only pass readings data to the template
+    return render_template("readings.html", readings=READINGS, cart_count=0)
 
 @app.route("/contact")
 def contact():
@@ -151,22 +147,13 @@ def privacy():
 # Updated thankyou for direct checkout flow
 @app.route("/thankyou")
 def thankyou():
-    # Note: In a real integration, the webhook would trigger order logging, 
-    # and this page would simply confirm receipt.
     status = request.args.get('status')
     order_id = request.args.get('order_id')
-    
-    # Simple status display
-    if status == 'success':
-        flash('Payment confirmed and order received. Thank you.', 'success')
-    elif status == 'failed':
-        flash('Payment failed. Please try again or contact support.', 'error')
-    
     return render_template("thankyou.html", 
                            cart_count=0,
                            status=status,
                            order_id=order_id,
-                           video_session_needed=False) # Simplified, assumed false for now
+                           video_session_needed=False)
 
 
 # --- DEPRECATED/REMOVED CART & MOCK PAYMENT ROUTES ---
@@ -234,31 +221,35 @@ def get_paypal_access_token():
 
 @app.route("/checkout", methods=["GET"])
 def checkout():
-    # Get cart and total, check if form filled
-    try:
-        cart_items, total_price, data_is_filled, _ = get_cart_data()
-    except Exception:
-        cart_items = []
-        total_price = 0.0
-        data_is_filled = False
-    if not cart_items:
-        flash("Your cart is empty.", "warning")
-        return redirect(url_for("cart"))
-    if not data_is_filled:
-        flash("Please complete the data entry form before checkout.", "danger")
-        return redirect(url_for("data_entry"))
+    # Get reading and mode from query parameters
+    reading_key = request.args.get("reading")
+    mode = request.args.get("mode")
+    # fallback or error if invalid
+    reading = READINGS.get(reading_key)
+    if not reading or mode not in ("pdf", "video"):
+        flash("Invalid reading selection.", "danger")
+        return redirect(url_for("readings"))
+    # Build item details
+    price = reading["pdf_price"] if mode == "pdf" else reading["video_price"]
+    item = {
+        "name": reading["name"],
+        "reading_mode": mode,
+        "price": price,
+        "id": str(uuid4()),
+        "reading_type": reading_key,
+        "question": None,  # Not collected here
+    }
     order_id = str(uuid4())
-    session["checkout_order_id"] = order_id
-    # Formatting total to 2 decimals as string
-    total_str = f"{total_price:.2f}"
+    total_str = f"{price:.2f}"
+    # All checkout now per-item; no cart, no user info at this page
     return render_template(
         "checkout.html",
-        items=cart_items,
+        items=[item],
         total=total_str,
         currency="EUR",
         paypal_client_id=PAYPAL_CLIENT_ID,
         order_id=order_id,
-        cart_count=len(cart_items),
+        cart_count=0,
     )
 
 @app.route("/mock_payment_gateway")
@@ -277,15 +268,19 @@ def clear_cart():
     return redirect(url_for("readings"))
 
 # --- PAYPAL API ROUTES ---
-@csrf.exempt
 @app.route("/api/paypal/orders", methods=["POST"])
 def api_paypal_orders():
-    order_id = session.get("checkout_order_id")
-    _, total_price, _, _ = get_cart_data()
+    order_id = request.args.get("order_id")
+    reading_key = request.args.get("reading")
+    mode = request.args.get("mode")
+    reading = READINGS.get(reading_key)
+    if not order_id or not reading or mode not in ("pdf", "video"):
+        return jsonify({"error": "Invalid order parameters."}), 400
+    price = reading["pdf_price"] if mode == "pdf" else reading["video_price"]
     body = {
         "intent": "CAPTURE",
         "purchase_units": [{
-            "amount": {"currency_code": "EUR", "value": f"{total_price:.2f}"},
+            "amount": {"currency_code": "EUR", "value": f"{price:.2f}"},
             "custom_id": order_id,
         }],
         "application_context": {
@@ -296,65 +291,107 @@ def api_paypal_orders():
     headers = {"Authorization": f"Bearer {get_paypal_access_token()}", "Content-Type": "application/json"}
     r = requests.post(f"{PAYPAL_API_BASE}/v2/checkout/orders", json=body, headers=headers, timeout=20)
     r.raise_for_status()
-    return jsonify(r.json()), 201
+    data = r.json()
 
-@csrf.exempt
+    # Persist a 'created' order note (do not fail the PayPal call on DB error)
+    internal_id = request.args.get("order_id")
+    reading = request.args.get("reading")
+    mode = request.args.get("mode")
+    try:
+        db = get_db()
+        db.execute(
+            """
+        INSERT OR IGNORE INTO orders (
+            order_id, timestamp, name, email, total_price, payment_status, completion_status,
+            birth_date, birth_time, birth_place, secondary_birth_date, secondary_birth_time, secondary_birth_place,
+            paypal_order_id, status, created_at, reading, mode
+        ) VALUES (?, datetime('now'), NULL, NULL, NULL, 'unpaid', 'new',
+                  NULL, NULL, NULL, NULL, NULL, NULL,
+                  ?, 'created', datetime('now'), ?, ?)
+        """,
+            (internal_id, data.get("id"), reading, mode),
+        )
+        db.commit()
+    except Exception as e:
+        print("create-order DB note failed:", e)
+
+    return jsonify(data), 201
+
 @app.route("/api/paypal/orders/<paypal_order_id>/capture", methods=["POST"])
 def api_paypal_capture(paypal_order_id):
-    headers = {"Authorization": f"Bearer {get_paypal_access_token()}", "Content-Type": "application/json"}
-    cap = requests.post(f"{PAYPAL_API_BASE}/v2/checkout/orders/{paypal_order_id}/capture", headers=headers, timeout=20)
-    cap.raise_for_status()
-    cap_data = cap.json()
-    # Ensure completed
-    if cap_data.get("status") != "COMPLETED":
-        return jsonify({"error": "Payment not completed."}), 400
-    # Save order to DB
-    order_id = session.get("checkout_order_id")
-    if not order_id:
-        return jsonify({"error": "Session or order ID missing."}), 400
-    cart_items, total_price, _, _ = get_cart_data()
-    customer_info = session.get("customer_info", {})
-    with app.app_context():
-        db = get_db()
-        db.execute("""
-            INSERT OR REPLACE INTO orders (order_id, timestamp, name, email, total_price, payment_status, completion_status, birth_date, birth_time, birth_place, secondary_birth_date, secondary_birth_time, secondary_birth_place)
-            VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);""",
-            (
-                order_id,
-                customer_info.get("name"),
-                customer_info.get("email"),
-                total_price,
-                "paid",
-                "new",
-                customer_info.get("birth_date"),
-                customer_info.get("birth_time"),
-                customer_info.get("birth_place"),
-                customer_info.get("secondary_birth_date"),
-                customer_info.get("secondary_birth_time"),
-                customer_info.get("secondary_birth_place"),
-            ),
-        )
-        for item in cart_items:
-            db.execute("""
-                INSERT OR REPLACE INTO order_items (order_id, item_id, reading_type, reading_mode, price, question)
-                VALUES (?, ?, ?, ?, ?, ?)""",
-                (
-                    order_id,
-                    item.get("id"),
-                    item.get("reading_type"),
-                    item.get("reading_mode"),
-                    item.get("price"),
-                    item.get("question"),
-                ),
-            )
-        db.commit()
-    # clear session
-    session.pop("cart", None)
-    session.pop("customer_info", None)
-    session.pop("checkout_order_id", None)
-    return jsonify({"redirect": url_for("thankyou", status="paid", order_id=order_id)})
+    token = get_paypal_access_token()
+    r = requests.post(
+        f"{PAYPAL_API_BASE}/v2/checkout/orders/{paypal_order_id}/capture",
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+        timeout=20,
+    )
+    r.raise_for_status()
+    data = r.json()
 
-@csrf.exempt
+    # require final status
+    if data.get("status") != "COMPLETED":
+        return {"error": "not_completed", "raw": data}, 400
+
+    internal_id = request.args.get("order_id")
+    reading = request.args.get("reading")
+    mode = request.args.get("mode")
+
+    # pull the paid amount from capture payload
+    try:
+        cap = data["purchase_units"][0]["payments"]["captures"][0]
+        amount_value = float(cap["amount"]["value"])
+        amount_ccy = cap["amount"]["currency_code"]
+    except Exception as e:
+        return {"error": f"parse_amount_failed: {e}", "raw": data}, 500
+
+    db = get_db()
+    try:
+        # 1) upsert the order row as paid
+        db.execute(
+            """
+            INSERT OR IGNORE INTO orders (
+                order_id, timestamp, name, email, total_price, payment_status, completion_status,
+                birth_date, birth_time, birth_place, secondary_birth_date, secondary_birth_time, secondary_birth_place,
+                paypal_order_id, status, created_at, captured_at, reading, mode
+            ) VALUES (?, datetime('now'), NULL, NULL, ?, 'paid', 'new',
+                      NULL, NULL, NULL, NULL, NULL, NULL,
+                      ?, 'captured', datetime('now'), datetime('now'), ?, ?)
+            """,
+            (internal_id, amount_value, paypal_order_id, reading, mode),
+        )
+
+        # 2) if it existed already, make sure totals/status are updated
+        db.execute(
+            """
+            UPDATE orders
+               SET total_price = COALESCE(?, total_price),
+                   payment_status = 'paid',
+                   status = 'captured',
+                   captured_at = datetime('now'),
+                   paypal_order_id = COALESCE(?, paypal_order_id),
+                   reading = COALESCE(?, reading),
+                   mode = COALESCE(?, mode)
+             WHERE order_id = ?
+            """,
+            (amount_value, paypal_order_id, reading, mode, internal_id),
+        )
+
+        # 3) insert a single line item that mirrors the reading
+        db.execute(
+            """
+            INSERT OR IGNORE INTO order_items (order_id, item_id, reading_type, reading_mode, price, question)
+            VALUES (?, ?, ?, ?, ?, NULL)
+            """,
+            (internal_id, str(uuid4()), reading, mode, amount_value),
+        )
+
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        return {"error": f"db_error: {e}"}, 500
+
+    return {"redirect": url_for("thankyou", status="paid", order_id=internal_id)}, 200
+
 @app.route("/webhooks/paypal", methods=["POST"])
 def paypal_webhook():
     headers = request.headers

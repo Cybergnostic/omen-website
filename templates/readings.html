@@ -1,7 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Readings & Prices - Omen Astrology{% endblock %} 
-
+{% block title %}Readings & Prices - Omen Astrology{% endblock %}
 
 {% block content %}
   {% with messages = get_flashed_messages(with_categories=true) %}
@@ -23,7 +22,6 @@
 
   <section class="section readings-grid">
     <div class="wrap cards-grid">
-
       {% for key, reading in readings.items() %}
       <article id="{{ key }}" class="card pricing">
         <h3 class="card-title">{{ reading.name }}</h3>
@@ -37,21 +35,12 @@
           {% elif key == 'synastry' %}Two charts compared: how the bond works in practice – flow, friction, and where to invest effort.
           {% endif %}
         </p>
-        
-        <div class="btn-row dual">
-          <a class="btn btn-primary" href="{{ paddle_links[key + '_pdf'] }}" 
-             style="width: 50%; text-align: center;">
-             PDF Report (€{{ reading.pdf_price }})
-          </a>
-
-          <a class="btn btn-ghost" href="{{ paddle_links[key + '_call'] }}"
-             style="width: 50%; text-align: center;">
-             Live Call (€{{ reading.video_price }})
-          </a>
+        <div class="btn-row" style="margin-top: 10px;">
+          <a href="{{ url_for('checkout', reading=key, mode='pdf') }}" class="btn btn-primary">Order PDF reading (&euro;{{ reading.pdf_price }})</a>
+          <a href="{{ url_for('checkout', reading=key, mode='video') }}" class="btn btn-ghost">Order Call (&euro;{{ reading.video_price }})</a>
         </div>
       </article>
       {% endfor %}
-
     </div>
   </section>
 {% endblock %}
