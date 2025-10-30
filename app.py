@@ -1,10 +1,16 @@
 # app.py
-from flask import Flask, render_template, request, redirect, url_for, session, g, flash
+from flask import Flask, render_template, request, redirect, url_for, session, g, flash, jsonify, make_response
 from pathlib import Path
 from datetime import datetime
 import sqlite3
 import csv 
 import uuid # Still useful if we generate internal IDs, though not needed for cart logic now
+import os
+import requests
+from flask.views import MethodView
+from flask_wtf.csrf import CSRFProtect, csrf_exempt
+
+csrf = CSRFProtect(app)
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
@@ -202,10 +208,58 @@ def save_data():
     # DEPRECATED
     return redirect(url_for("readings"))
 
-@app.route("/checkout")
+# --- PAYPAL ENV CONFIG ---
+PAYPAL_ENV = os.environ.get("PAYPAL_ENV", "sandbox")  # default to sandbox
+PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID", "your-client-id")
+PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET", "your-secret")
+PAYPAL_WEBHOOK_ID = os.environ.get("PAYPAL_WEBHOOK_ID", "")
+PAYPAL_API_BASE = (
+    "https://api-m.sandbox.paypal.com"
+    if PAYPAL_ENV == "sandbox"
+    else "https://api-m.paypal.com"
+)
+
+# --- PAYPAL OAUTH UTILITY ---
+def get_paypal_access_token():
+    url = f"{PAYPAL_API_BASE}/v1/oauth2/token"
+    resp = requests.post(
+        url,
+        headers={"Accept": "application/json", "Accept-Language": "en_US"},
+        data={"grant_type": "client_credentials"},
+        auth=(PAYPAL_CLIENT_ID, PAYPAL_SECRET),
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+@app.route("/checkout", methods=["GET"])
 def checkout():
-    # DEPRECATED
-    return redirect(url_for("readings"))
+    # Get cart and total, check if form filled
+    try:
+        cart_items, total_price, data_is_filled, _ = get_cart_data()
+    except Exception:
+        cart_items = []
+        total_price = 0.0
+        data_is_filled = False
+    if not cart_items:
+        flash("Your cart is empty.", "warning")
+        return redirect(url_for("cart"))
+    if not data_is_filled:
+        flash("Please complete the data entry form before checkout.", "danger")
+        return redirect(url_for("data_entry"))
+    order_id = str(uuid4())
+    session["checkout_order_id"] = order_id
+    # Formatting total to 2 decimals as string
+    total_str = f"{total_price:.2f}"
+    return render_template(
+        "checkout.html",
+        items=cart_items,
+        total=total_str,
+        currency="EUR",
+        paypal_client_id=PAYPAL_CLIENT_ID,
+        order_id=order_id,
+        cart_count=len(cart_items),
+    )
 
 @app.route("/mock_payment_gateway")
 def mock_payment_gateway():
@@ -221,6 +275,126 @@ def payment_success():
 def clear_cart():
     # DEPRECATED
     return redirect(url_for("readings"))
+
+# --- PAYPAL API ROUTES ---
+@csrf.exempt
+@app.route("/api/paypal/orders", methods=["POST"])
+def api_paypal_orders():
+    order_id = session.get("checkout_order_id")
+    _, total_price, _, _ = get_cart_data()
+    body = {
+        "intent": "CAPTURE",
+        "purchase_units": [{
+            "amount": {"currency_code": "EUR", "value": f"{total_price:.2f}"},
+            "custom_id": order_id,
+        }],
+        "application_context": {
+            "user_action": "PAY_NOW",
+            "shipping_preference": "NO_SHIPPING"
+        }
+    }
+    headers = {"Authorization": f"Bearer {get_paypal_access_token()}", "Content-Type": "application/json"}
+    r = requests.post(f"{PAYPAL_API_BASE}/v2/checkout/orders", json=body, headers=headers, timeout=20)
+    r.raise_for_status()
+    return jsonify(r.json()), 201
+
+@csrf.exempt
+@app.route("/api/paypal/orders/<paypal_order_id>/capture", methods=["POST"])
+def api_paypal_capture(paypal_order_id):
+    headers = {"Authorization": f"Bearer {get_paypal_access_token()}", "Content-Type": "application/json"}
+    cap = requests.post(f"{PAYPAL_API_BASE}/v2/checkout/orders/{paypal_order_id}/capture", headers=headers, timeout=20)
+    cap.raise_for_status()
+    cap_data = cap.json()
+    # Ensure completed
+    if cap_data.get("status") != "COMPLETED":
+        return jsonify({"error": "Payment not completed."}), 400
+    # Save order to DB
+    order_id = session.get("checkout_order_id")
+    if not order_id:
+        return jsonify({"error": "Session or order ID missing."}), 400
+    cart_items, total_price, _, _ = get_cart_data()
+    customer_info = session.get("customer_info", {})
+    with app.app_context():
+        db = get_db()
+        db.execute("""
+            INSERT OR REPLACE INTO orders (order_id, timestamp, name, email, total_price, payment_status, completion_status, birth_date, birth_time, birth_place, secondary_birth_date, secondary_birth_time, secondary_birth_place)
+            VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);""",
+            (
+                order_id,
+                customer_info.get("name"),
+                customer_info.get("email"),
+                total_price,
+                "paid",
+                "new",
+                customer_info.get("birth_date"),
+                customer_info.get("birth_time"),
+                customer_info.get("birth_place"),
+                customer_info.get("secondary_birth_date"),
+                customer_info.get("secondary_birth_time"),
+                customer_info.get("secondary_birth_place"),
+            ),
+        )
+        for item in cart_items:
+            db.execute("""
+                INSERT OR REPLACE INTO order_items (order_id, item_id, reading_type, reading_mode, price, question)
+                VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    order_id,
+                    item.get("id"),
+                    item.get("reading_type"),
+                    item.get("reading_mode"),
+                    item.get("price"),
+                    item.get("question"),
+                ),
+            )
+        db.commit()
+    # clear session
+    session.pop("cart", None)
+    session.pop("customer_info", None)
+    session.pop("checkout_order_id", None)
+    return jsonify({"redirect": url_for("thankyou", status="paid", order_id=order_id)})
+
+@csrf.exempt
+@app.route("/webhooks/paypal", methods=["POST"])
+def paypal_webhook():
+    headers = request.headers
+    required_headers = [
+        "PAYPAL-TRANSMISSION-ID",
+        "PAYPAL-TRANSMISSION-TIME",
+        "PAYPAL-TRANSMISSION-SIG",
+        "PAYPAL-AUTH-ALGO",
+        "PAYPAL-CERT-URL"
+    ]
+    actual_headers = {h: headers.get(h) for h in required_headers}
+    webhook_id = PAYPAL_WEBHOOK_ID
+    verify_body = {
+        "transmission_id": actual_headers["PAYPAL-TRANSMISSION-ID"],
+        "transmission_time": actual_headers["PAYPAL-TRANSMISSION-TIME"],
+        "cert_url": actual_headers["PAYPAL-CERT-URL"],
+        "auth_algo": actual_headers["PAYPAL-AUTH-ALGO"],
+        "transmission_sig": actual_headers["PAYPAL-TRANSMISSION-SIG"],
+        "webhook_id": webhook_id,
+        "webhook_event": request.get_json(force=True)
+    }
+    resp = requests.post(f"{PAYPAL_API_BASE}/v1/notifications/verify-webhook-signature", json=verify_body, headers={"Authorization": f"Bearer {get_paypal_access_token()}", "Content-Type": "application/json"}, timeout=20)
+    try:
+        resp.raise_for_status()
+        result = resp.json()
+    except Exception:
+        return make_response("", 400)
+    event = verify_body["webhook_event"]
+    # Only update paid if verified and correct event
+    if (
+        result.get("verification_status") == "SUCCESS"
+        and event.get("event_type") == "PAYMENT.CAPTURE.COMPLETED"
+    ):
+        custom_id = event.get("resource", {}).get("custom_id")
+        if custom_id:
+            with app.app_context():
+                db = get_db()
+                db.execute("UPDATE orders SET payment_status = 'paid' WHERE order_id = ?", (custom_id,))
+                db.commit()
+    return make_response("", 200)
 
 # --- CONTACT FORM ---
 

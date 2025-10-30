@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Checkout – Omen Astrology{% endblock %}
+{% block content %}
+<h2>Order Review</h2>
+<ul>
+  {% for item in items %}
+    <li>{{ item.name }} ({{ item.reading_mode|upper }}): &euro;{{ '%.2f'|format(item.price) }}</li>
+  {% endfor %}
+</ul>
+<p><b>Total: &euro;{{ total }}</b></p>
+<div id="paypal-button-container"></div>
+{% endblock %}
+{% block scripts %}
+<script src="https://www.paypal.com/sdk/js?client-id={{ paypal_client_id }}&currency=EUR"></script>
+<script>
+  paypal.Buttons({
+    createOrder: function(data, actions) {
+      return fetch("/api/paypal/orders", {method: 'POST', headers: {'Content-Type': 'application/json'}})
+        .then(res => res.json())
+        .then(data => data.id);
+    },
+    onApprove: function(data, actions) {
+      return fetch(`/api/paypal/orders/${data.orderID}/capture`, {method: 'POST', headers: {'Content-Type': 'application/json'}})
+        .then(res => res.json())
+        .then(obj => { if(obj.redirect) window.location = obj.redirect; });
+    },
+    onCancel: function() { window.location = "{{ url_for('cart') }}"; },
+    onError: function(err) { alert('There was an error processing your payment. Please try again or contact support.'); }
+  }).render('#paypal-button-container');
+</script>
+{% endblock %}
