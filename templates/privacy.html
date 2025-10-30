@@ -1,36 +1,8 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <!-- [HEAD - META & CSS LINK] -->
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Privacy & Terms - Omen Astrology</title>
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
-</head>
-<body>
+{% extends "base.html" %}
 
-  <!-- ========================================= -->
-  <!-- [HEADER / NAVIGATION SECTION] -->
-  <!-- ========================================= -->
-  <header class="topbar">
-    <div class="wrap">
-      <a class="brand" href="{{ url_for('home') }}">
-        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
-        <span class="brand-text">OMEN ASTROLOGY</span>
-      </a>
-      <nav class="nav">
-        <a href="{{ url_for('home') }}">HOME</a>
-        <a href="{{ url_for('about') }}">About</a>
-        <a href="{{ url_for('readings') }}">Readings</a>
-        {% if cart_count > 0 %} 
-            <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a> 
-        {% endif %}
-        <a href="{{ url_for('contact') }}">CONTACT</a>
-      </nav>
-    </div>
-  </header>
+{% block title %}Privacy & Terms - Omen Astrology{% endblock %}
 
+{% block content %}
   <!-- ========================================= -->
   <!-- [LEGAL - PRIVACY & TERMS SECTION] -->
   <!-- ========================================= -->
@@ -48,12 +20,20 @@
       <p>You can request deletion or a copy of your data at any time via email.</p>
 
       <h3>Refunds</h3>
-      <p>If I have not started the work, refunds are possible. After delivery, refunds are not offered.</p>
+      <p>If we have not started the work, refunds are possible. After delivery, refunds are not offered.</p>
+      <p>If there is ever a concern or misunderstanding, please contact me first so we can resolve it together.</p>
+      <h3>Terms of Service</h3>
+      <ul style="font-size: 1em; color:#444; margin-top:8px;">
+        <li>Readings are digital services delivered via email or live call</li>
+        <li>Work begins after payment &amp; form submission</li>
+        <li>Refunds only if work has not started</li>
+        <li>Client agrees that this is a guidance service, not a guaranteed outcome service</li>
+        <li>By purchasing, you consent to this policy</li>
+      </ul>
 
       <h3>Copyright</h3>
       <p>Readings are for personal use. Please do not republish without permission.</p>
     </div>
   </section>
 
-</body>
-</html>
+{% endblock %}

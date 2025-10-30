@@ -1,29 +1,9 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Readings & Prices - Omen Astrology</title>
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
-</head>
-<body>
+{% extends "base.html" %}
 
-  <header class="topbar">
-    <div class="wrap">
-      <a class="brand" href="{{ url_for('home') }}">
-        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
-        <span class="brand-text">OMEN ASTROLOGY</span>
-      </a>
-      <nav class="nav">
-        <a href="{{ url_for('home') }}">HOME</a>
-        <a href="{{ url_for('about') }}">About</a>
-        <a href="{{ url_for('readings') }}">Readings</a>
-        <a href="{{ url_for('contact') }}">CONTACT</a>
-      </nav>
-    </div>
-  </header>
+{% block title %}Readings & Prices - Omen Astrology{% endblock %} 
 
+
+{% block content %}
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
       {% for category, message in messages %}
@@ -74,16 +54,4 @@
 
     </div>
   </section>
-
-  <div class="wrap" style="margin-top: 50px; padding-bottom: 20px; text-align: center;">
-    <p style="font-size: 0.8em; color: #aaa;">
-      &copy; 2025 Omen Astrology. | 
-      <a href="{{ url_for('privacy') }}" style="color: #666;">Privacy Policy</a> | 
-      <a href="{{ url_for('faq') }}#refund-policy" style="color: #666;">Refund Policy / FAQ</a> |
-      <a href="{{ url_for('contact') }}" style="color: #666;">Support</a>
-    </p>
-  </div>
-
-
-</body>
-</html>
+{% endblock %}

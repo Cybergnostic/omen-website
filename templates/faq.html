@@ -1,35 +1,8 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <!-- [HEAD - META & CSS LINK] -->
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>FAQ - Omen Astrology</title>
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
-</head>
-<body>
+{% extends "base.html" %}
 
-  <!-- ========================================= -->
-  <!-- [HEADER / NAVIGATION SECTION] -->
-  <!-- ========================================= -->
-  <header class="topbar">
-    <div class="wrap">
-      <a class="brand" href="{{ url_for('home') }}">
-        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
-        <span class="brand-text">OMEN ASTROLOGY</span>
-      </a>
-      <nav class="nav">
-        <a href="{{ url_for('home') }}">HOME</a>
-        <a href="{{ url_for('about') }}">About</a>
-        <a href="{{ url_for('readings') }}">Readings</a>
-        {% if cart_count > 0 %} 
-            <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a> 
-        {% endif %}
-        <a href="{{ url_for('contact') }}">CONTACT</a>
-      </nav>
-    </div>
-  </header>
+{% block title %}FAQ - Omen Astrology{% endblock %}
+
+{% block content %}
 
   <!-- ========================================= -->
   <!-- [FAQ - LIST SECTION] -->
@@ -67,8 +40,15 @@
         <summary>Is my data private?</summary>
         <p>Yes. Your data is never shared with third parties.</p>
       </details>
+      <details class="faq-item">
+        <summary>Are astrology readings medical, legal, or financial advice?</summary>
+        <p>Astrology services offered are for personal guidance and insight only. They are not medical, legal, or financial advice.</p>
+      </details>
+      <details class="faq-item">
+        <summary>How are results determined?</summary>
+        <p>Results are based on astrological analysis and personal interpretation.</p>
+      </details>
     </div>
   </section>
 
-</body>
-</html>
+{% endblock %}

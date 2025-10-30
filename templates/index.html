@@ -1,301 +1,268 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>OMEN ASTROLOGY</title>
+{% extends "base.html" %}
 
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
+{% block title %}About - Omen Astrology{% endblock %}
 
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
-</head>
+{% block content %}
+  <section class="hero">
+    <div class="hero-media" aria-hidden="true"></div>
+    <div class="hero-wash" aria-hidden="true"></div>
 
-<body>
-
-  <header class="topbar">
     <div class="wrap">
-      <a class="brand" href="{{ url_for('home') }}">
-        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
-        <span class="brand-text">OMEN ASTROLOGY</span>
-      </a>
-   
-       <nav class="nav">
-        <a href="{{ url_for('home') }}">HOME</a>
-        <a href="{{ url_for('about') }}">About</a>
-        <a href="{{ url_for('readings') }}">Readings</a>
-        {% if cart_count > 0 %} 
-            <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a> 
-        {% endif %}
-        <a href="{{ url_for('contact') }}">CONTACT</a>
-      </nav>
+      <div class="hero-grid">
+        <div class="hero-left">
+          <div class="hero-content">
+            <h1 class="title">Omen Astrology</h1>
+            <p class="lede">
   
-     </div>
-  </header>
-
-
-    <section class="hero">
-      <div class="hero-media" aria-hidden="true"></div>
-      <div class="hero-wash" aria-hidden="true"></div>
-
-      <div class="wrap">
-        <div class="hero-grid">
-          <div class="hero-left">
-            <div class="hero-content">
-              <h1 class="title">Omen Astrology</h1>
-              <p class="lede">
-    
-                 Clarity, timing, and practical guidance — written or live consultations.
- </p>
-              <div class="cta-row">
-                <a class="btn btn-primary" href="{{ url_for('readings') }}">Get a Reading</a>
-              </div>
+                Clarity, timing, and practical guidance — written or live consultations.
+</p>
+            <div class="cta-row">
+              <a class="btn btn-primary" href="{{ url_for('readings') }}">Get a Reading</a>
             </div>
           </div>
-
-          <div class="hero-right" aria-hidden="true"></div>
-        </div>
-      
-       </div>
-    </section>
-
-
-    <section id="services" class="section services">
-      <div class="wrap services-grid">
-
-        <div class="services-intro">
-          <h2 class="h-title">Readings &amp;<br>Consultations</h2>
-          <p class="h-lede">
-            Unlike simple fortune-telling, this discipline works on the principle
-            that the movements of the cosmos reflect, but do not cause, the powerful
-     
-               momentum of existence.
- By applying these universal patterns to your
-            personal chart, we offer grounded, reasonable interpretations that
-            deliver self-reflective insight - not just prediction - as the primary
-            purpose of every reading.
- </p>
         </div>
 
-        <div class="cards-grid">
-          <a class="card" href="{{ url_for('readings') }}#natal">
-            <h3 class="card-title">Natal Chart Analysis</h3>
-            <p class="card-text">Temperament, talents, challenges, and current focus.</p>
-            <span class="card-link">Learn more →</span>
-          </a>
-
-          <a 
- class="card" href="{{ url_for('readings') }}#orientation">
-            <h3 class="card-title">Orientation / Career Guidance</h3>
-            <p class="card-text">Strengths, direction, and timing for study/work moves.</p>
-            <span class="card-link">Learn more →</span>
-          </a>
-
-          <a class="card" href="{{ url_for('readings') }}#love">
-            <h3 class="card-title">Love &amp;
- Relationship Guidance</h3>
-            <p class="card-text">Patterns in love, readiness, and next steps.</p>
-            <span class="card-link">Learn more →</span>
-          </a>
-
-          <a class="card" href="{{ url_for('readings') }}#focus">
-            <h3 class="card-title">Other Focus Area</h3>
-            <p class="card-text">Family/Home, finances, health themes, relocation, studies, travel…</p>
-       
-           <span class="card-link">Learn more →</span>
-          </a>
-
-          <a class="card" href="{{ url_for('readings') }}#annual">
-            <h3 class="card-title">Annual Horoscope (Solar Return)</h3>
-            <p class="card-text">Key themes, months, and practical timing for the year.</p>
-            <span class="card-link">Learn more →</span>
-          </a>
-
-      
-         <a class="card" href="{{ url_for('readings') }}#horary">
-            <h3 class="card-title">Horary Chart Analysis</h3>
-            <p class="card-text">One clear question, one focused judgment.</p>
-            <span class="card-link">Learn more →</span>
-          </a>
-
-          <a class="card" href="{{ url_for('readings') }}#synastry">
-            <h3 class="card-title">Synastry</h3>
-       
-           <p class="card-text">Two charts compared: flow, friction, and priorities.</p>
-            <span class="card-link">Learn more →</span>
-          </a>
-        </div>
-
+        <div class="hero-right" aria-hidden="true"></div>
       </div>
-    </section>
+    
+      </div>
+  </section>
 
 
-  <section class="section home-readings">
-      <div class="wrap">
-        <h2 class="h-title">Start Your Journey</h2>
-        
-        <div class="readings-split">
+  <section id="services" class="section services">
+    <div class="wrap services-grid">
+
+      <div class="services-intro">
+        <h2 class="h-title">Readings &amp;<br>Consultations</h2>
+        <p class="h-lede">
+          Unlike simple fortune-telling, this discipline works on the principle
+          that the movements of the cosmos reflect, but do not cause, the powerful
+    
+              momentum of existence.
+By applying these universal patterns to your
+          personal chart, we offer grounded, reasonable interpretations that
+          deliver self-reflective insight - not just prediction - as the primary
+          purpose of every reading.
+</p>
+      </div>
+
+      <div class="cards-grid">
+        <a class="card" href="{{ url_for('readings') }}#natal">
+          <h3 class="card-title">Natal Chart Analysis</h3>
+          <p class="card-text">Temperament, talents, challenges, and current focus.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a 
+class="card" href="{{ url_for('readings') }}#orientation">
+          <h3 class="card-title">Orientation / Career Guidance</h3>
+          <p class="card-text">Strengths, direction, and timing for study/work moves.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a class="card" href="{{ url_for('readings') }}#love">
+          <h3 class="card-title">Love &amp;
+Relationship Guidance</h3>
+          <p class="card-text">Patterns in love, readiness, and next steps.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a class="card" href="{{ url_for('readings') }}#focus">
+          <h3 class="card-title">Other Focus Area</h3>
+          <p class="card-text">Family/Home, finances, health themes, relocation, studies, travel…</p>
       
-         
-          <div class="readings-visual">
-              <h3 class="card-title" style="margin-top:0;">Your Blueprint: The Natal Chart</h3>
-              <p class="card-text">Every reading begins by accurately charting your moment of birth.
- This is the foundation of all focused analysis.</p>
-              <div class="chart-placeholder">
-                  <img src="{{ url_for('static', filename='images/natal_chart_example.png') }}" alt="Example of a Natal Astrology Chart"> 
-              </div>
-              <a class="btn btn-primary" href="{{ url_for('readings') }}" style="margin-top: 20px; width:100%;">Explore All Services</a>
-          </div>
- 
-                 
-          <div>
-              <p class="h-lede" style="margin-bottom: 24px;">We offer custom, detailed analysis across various astrological disciplines.
- Here are the two most popular entry points:</p>
-              
-              <div class="cards-grid">
-                <div class="card">
-                  <h4 class="card-title">Foundational Natal Analysis</h4>
-                  <p class="card-text">A foundational deep dive into your potential, 
- temperament, and life purpose. Essential starting point.</p>
-                  <a class="card-link" href="{{ url_for('readings') }}#natal">View Details →</a>
-                </div>
-                <div class="card">
-                  <h4 class="card-title">Synastry & Relationships</h4>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a class="card" href="{{ url_for('readings') }}#annual">
+          <h3 class="card-title">Annual Horoscope (Solar Return)</h3>
+          <p class="card-text">Key themes, months, and practical timing for the year.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+    
+        <a class="card" href="{{ url_for('readings') }}#horary">
+          <h3 class="card-title">Horary Chart Analysis</h3>
+          <p class="card-text">One clear question, one focused judgment.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a class="card" href="{{ url_for('readings') }}#synastry">
+          <h3 class="card-title">Synastry</h3>
+      
+          <p class="card-text">Two charts compared: flow, friction, and priorities.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+      </div>
+
+    </div>
+  </section>
+
+
+<section class="section home-readings">
+    <div class="wrap">
+      <h2 class="h-title">Start Your Journey</h2>
+      
+      <div class="readings-split">
+    
+        
+        <div class="readings-visual">
+            <h3 class="card-title" style="margin-top:0;">Your Blueprint: The Natal Chart</h3>
+            <p class="card-text">Every reading begins by accurately charting your moment of birth.
+This is the foundation of all focused analysis.</p>
+            <div class="chart-placeholder">
+                <img src="{{ url_for('static', filename='images/natal_chart_example.png') }}" alt="Example of a Natal Astrology Chart"> 
+            </div>
+            <a class="btn btn-primary" href="{{ url_for('readings') }}" style="margin-top: 20px; width:100%;">Explore All Services</a>
+        </div>
+
                 
-                   <p class="card-text">Understanding the dynamics between your chart and a partner's—harmonious flow and friction points.</p>
-                  <a class="card-link" href="{{ url_for('readings') }}#synastry">View Details →</a>
-                </div>
+        <div>
+            <p class="h-lede" style="margin-bottom: 24px;">We offer custom, detailed analysis across various astrological disciplines.
+Here are the two most popular entry points:</p>
+            
+            <div class="cards-grid">
+              <div class="card">
+                <h4 class="card-title">Foundational Natal Analysis</h4>
+                <p class="card-text">A foundational deep dive into your potential, 
+temperament, and life purpose. Essential starting point.</p>
+                <a class="card-link" href="{{ url_for('readings') }}#natal">View Details →</a>
               </div>
+              <div class="card">
+                <h4 class="card-title">Synastry & Relationships</h4>
               
-              <div class="cta-row" style="margin-top: 
- 30px;">
-                  <a class="btn btn-ghost" href="{{ url_for('readings') }}">View Full Price List</a>
+                  <p class="card-text">Understanding the dynamics between your chart and a partner's—harmonious flow and friction points.</p>
+                <a class="card-link" href="{{ url_for('readings') }}#synastry">View Details →</a>
               </div>
+            </div>
+            
+            <div class="cta-row" style="margin-top: 
+30px;">
+                <a class="btn btn-ghost" href="{{ url_for('readings') }}">View Full Price List</a>
+            </div>
 
-          </div>
-
-        </div>
-      </div>
-  </section>
-
-
-  <section class="section about-preview">
-    <div class="wrap">
-      
-      <div class="intro-content"> 
-        <h2 class="h-title">Our Process & Commitment</h2>
-        <p class="h-lede">
-          Omen is a small team of practicing astrologers (my wife and I). We focus on delivering traditional, reliable guidance. Every reading is written with care, focusing on timing, patterns, and practical next steps — always personal, never automated.
-        </p>
-      </div>
-
-      <div class="steps" style="margin-top: 40px; margin-bottom: 40px;">
-        <div class="step">
-          <div class="step-num">1</div>
-          <h3 class="step-title">Submit Your Request</h3>
-          <p class="step-text">Choose the type of reading and submit your birth data and questions.</p>
-        </div>
-        <div class="step">
-          <div class="step-num">2</div>
-          <h3 class="step-title">Chart Preparation</h3>
-          <p class="step-text">Our team studies your chart and focuses on the most critical themes and timing.</p>
-        </div>
-        <div class="step">
-          <div class="step-num">3</div>
-          <h3 class="step-title">Personal Delivery</h3>
-          <p class="step-text">You receive a clear, practical reading with concrete insights and next steps.</p>
-        </div>
-      </div>
-
-      <div class="intro-content"> 
-        <p>
-          We are focused on delivering the highest quality and most insightful astrological advice possible. Your honest feedback is invaluable as we grow. Every client's experience helps refine our commitment to clarity and precision.
-        </p>
-        <p style="font-style: italic; color: #555;">"I will reach out to you directly for feedback after your reading is delivered."</p>
-        
-        <div class="cta-row" style="margin-top: 30px;">
-            <a class="btn btn-primary" href="{{ url_for('about') }}">Meet the Team (About Us)</a>
-            <a class="btn btn-ghost" href="{{ url_for('contact') }}">Contact Us With Questions</a>
-        </div>
-      </div>
-
-    </div> </section> <section class="section testimonials">
-    <div class="wrap">
-      
-      <div class="intro-content"> 
-        <h2 class="h-title">What Clients Are Saying</h2>
-        <p class="h-lede">
-          Client feedback is essential. We are currently collecting our first round of reviews from recent clients.
-        </p>
-      </div>
-
-      <div class="testimonials-list" style="margin-top: 40px;">
-        
-        <div class="testimonial">
-          <blockquote>
-            "A very insightful and clear reading. It provided the practical guidance I was looking for and helped me understand my current situation."
-          </blockquote>
-          <figcaption>
-            — C.M.
-          </figcaption>
-        </div>
-
-        <div class="testimonial">
-          <blockquote>
-            "The annual horoscope was incredibly detailed and accurate. It's been a valuable map for the year. Highly recommend the PDF report."
-          </blockquote>
-          <figcaption>
-            — J. Alverez
-          </figcaption>
-        </div>
-
-        <div class="testimonial">
-          <blockquote>
-            "I was new to traditional astrology, and the 'Other Focus Area' reading was perfect. It directly addressed my questions about my career."
-          </blockquote>
-          <figcaption>
-            — S. Lee
-          </figcaption>
         </div>
 
       </div>
     </div>
-  </section>
+</section>
 
 
-  <section class="section faq-preview">
-    <div class="wrap">
-      <div class="intro-content"> <h2 class="h-title">Quick Answers (FAQ)</h2>
-   
-           <div class="faq-list">
-          <details>
-            <summary>What information do you need from me?</summary>
-            <p>Birth date, time, and location.
- For horary, a clear question.</p>
-          </details>
-          <details>
-            <summary>How are readings delivered?</summary>
-            <p>Written PDF by default;
- live sessions are available on request.</p>
-          </details>
-          <details>
-            <summary>How long does it take?</summary>
-            <p>Most written readings are delivered within 5–7 days.</p>
-          </details>
-        </div>
-        <a class="btn btn-ghost" href="{{ url_for('faq') }}">See all FAQs</a>
-      </div>
- 
-       </div>
-  </section>
-
-  <section class="section cta-strip">
-    <div class="wrap cta-strip-inner">
-      <p class="cta-strip-text">Ready to begin?
- Start with a Written Reading.</p>
-      <a class="btn btn-primary" href="{{ url_for('readings') }}">Get a Reading</a>
+<section class="section about-preview">
+  <div class="wrap">
+    
+    <div class="intro-content"> 
+      <h2 class="h-title">Our Process & Commitment</h2>
+      <p class="h-lede">
+        Omen is a small team of practicing astrologers (my wife and I). We focus on delivering traditional, reliable guidance. Every reading is written with care, focusing on timing, patterns, and practical next steps — always personal, never automated.
+      </p>
     </div>
-  </section>
+
+    <div class="steps" style="margin-top: 40px; margin-bottom: 40px;">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h3 class="step-title">Submit Your Request</h3>
+        <p class="step-text">Choose the type of reading and submit your birth data and questions.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h3 class="step-title">Chart Preparation</h3>
+        <p class="step-text">Our team studies your chart and focuses on the most critical themes and timing.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h3 class="step-title">Personal Delivery</h3>
+        <p class="step-text">You receive a clear, practical reading with concrete insights and next steps.</p>
+      </div>
+    </div>
+
+    <div class="intro-content"> 
+      <p>
+        We are focused on delivering the highest quality and most insightful astrological advice possible. Your honest feedback is invaluable as we grow. Every client's experience helps refine our commitment to clarity and precision.
+      </p>
+      <p style="font-style: italic; color: #555;">"I will reach out to you directly for feedback after your reading is delivered."</p>
+      
+      <div class="cta-row" style="margin-top: 30px;">
+          <a class="btn btn-primary" href="{{ url_for('about') }}">Meet the Team (About Us)</a>
+          <a class="btn btn-ghost" href="{{ url_for('contact') }}">Contact Us With Questions</a>
+      </div>
+    </div>
+
+  </div> </section> <section class="section testimonials">
+  <div class="wrap">
+    
+    <div class="intro-content"> 
+      <h2 class="h-title">What Clients Are Saying</h2>
+      <p class="h-lede">
+        Client feedback is essential. We are currently collecting our first round of reviews from recent clients.
+      </p>
+    </div>
+
+    <div class="testimonials-list" style="margin-top: 40px;">
+      
+      <div class="testimonial">
+        <blockquote>
+          "A very insightful and clear reading. It provided the practical guidance I was looking for and helped me understand my current situation."
+        </blockquote>
+        <figcaption>
+          — C.M.
+        </figcaption>
+      </div>
+
+      <div class="testimonial">
+        <blockquote>
+          "The annual horoscope was incredibly detailed and accurate. It's been a valuable map for the year. Highly recommend the PDF report."
+        </blockquote>
+        <figcaption>
+          — J. Alverez
+        </figcaption>
+      </div>
+
+      <div class="testimonial">
+        <blockquote>
+          "I was new to traditional astrology, and the 'Other Focus Area' reading was perfect. It directly addressed my questions about my career."
+        </blockquote>
+        <figcaption>
+          — S. Lee
+        </figcaption>
+      </div>
+
+    </div>
+  </div>
+</section>
 
 
-</body>
-</html>
+<section class="section faq-preview">
+  <div class="wrap">
+    <div class="intro-content"> <h2 class="h-title">Quick Answers (FAQ)</h2>
+  
+          <div class="faq-list">
+        <details>
+          <summary>What information do you need from me?</summary>
+          <p>Birth date, time, and location.
+For horary, a clear question.</p>
+        </details>
+        <details>
+          <summary>How are readings delivered?</summary>
+          <p>Written PDF by default;
+live sessions are available on request.</p>
+        </details>
+        <details>
+          <summary>How long does it take?</summary>
+          <p>Most written readings are delivered within 5–7 days.</p>
+        </details>
+      </div>
+      <a class="btn btn-ghost" href="{{ url_for('faq') }}">See all FAQs</a>
+    </div>
+
+      </div>
+</section>
+
+<section class="section cta-strip">
+  <div class="wrap cta-strip-inner">
+    <p class="cta-strip-text">Ready to begin?
+Start with a Written Reading.</p>
+    <a class="btn btn-primary" href="{{ url_for('readings') }}">Get a Reading</a>
+  </div>
+</section>
+{% endblock %}

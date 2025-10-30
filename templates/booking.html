@@ -1,33 +1,8 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Order PDF Reading - Omen Astrology</title>
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
-  <link rel="icon" href="{{ url_for('static', filename='images/logo.png') }}">
-</head>
+{% extends "base.html" %}
 
-<body>
-  <header class="topbar">
-    <div class="wrap">
-      <a class="brand" href="{{ url_for('home') }}">
-        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
-        <span class="brand-text">OMEN ASTROLOGY</span>
-      </a>
-      <nav class="nav">
-        <a href="{{ url_for('home') }}">HOME</a>
-        <a href="{{ url_for('about') }}">About</a>
-        <a href="{{ url_for('readings') }}">Readings</a>
-        {% if cart_count > 0 %} 
-            <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a> 
-        {% endif %}
-        <a href="{{ url_for('contact') }}">CONTACT</a>
-      </nav>
-    </div>
-  </header>
+{% block title %}Order PDF Reading - Omen Astrology{% endblock %}
 
+{% block content %}
   <section class="section">
     <div class="wrap text-col">
       <h1 class="h-title">Order PDF Reading</h1>
@@ -87,7 +62,8 @@
         <button class="btn btn-primary" type="submit">Submit Order</button>
         
         <p style="margin-top: 1rem; font-size: 14px; color: #666;">
-          You'll receive payment instructions via email within 24 hours.
+          You'll receive payment instructions via email within 24 hours.<br>
+          <span style="color:#3b0e41;">You will receive your reading via email. Delivery time: 3-10 days depending on reading type.</span>
         </p>
       </form>
     </div>
@@ -130,6 +106,17 @@
       </div>
     </div>
   </section>
-
-</body>
-</html>
+  <!-- Terms of Service snippet below checkout UI -->
+  <section class="section" style="padding-top:18px;">
+    <div class="wrap text-col">
+      <h3 style="margin-bottom:6px; font-size:1.08em; color:#492672;">Terms of Service</h3>
+      <ul style="font-size: 1em; color:#444;">
+        <li>Readings are digital services delivered via email or live call</li>
+        <li>Work begins after payment &amp; form submission</li>
+        <li>Refunds only if work has not started</li>
+        <li>Client agrees that this is a guidance service, not a guaranteed outcome service</li>
+        <li>By purchasing, you consent to this policy</li>
+      </ul>
+    </div>
+  </section>
+{% endblock %}

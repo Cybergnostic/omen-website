@@ -6011,3 +6011,1720 @@ window.Cal = window.Cal || function () {
 </body>
 </html>
 
+----- app.py -----
+# app.py
+from flask import Flask, render_template, request, redirect, url_for, session, g, flash
+from pathlib import Path
+from datetime import datetime
+import sqlite3
+import csv 
+import uuid # Still useful if we generate internal IDs, though not needed for cart logic now
+
+# --- CONFIGURATION ---
+BASE_DIR = Path(__file__).resolve().parent
+DATABASE = 'data/omen_orders.db'
+# IMPORTANT: This secret key is for development only. Use a long, random key in production.
+app = Flask(
+    __name__,
+    static_folder="static",
+    template_folder="templates"
+)
+app.secret_key = b'your_long_and_secret_key_here' 
+
+
+# --- DATABASE UTILITIES ---
+
+def get_db():
+    """Opens a new database connection if there is none yet for the current application context."""
+    db = getattr(g, '_database', None)
+    if db is None:
+        Path("data").mkdir(exist_ok=True)
+        db = g._database = sqlite3.connect(DATABASE)
+        db.row_factory = sqlite3.Row # Allows accessing columns by name
+    return db
+
+@app.teardown_appcontext
+def close_connection(exception):
+    """Closes the database again at the end of the request."""
+    db = getattr(g, '_database', None)
+    if db is not None:
+        db.close()
+
+def init_db():
+    """Initializes the database schema."""
+    with app.app_context():
+        db = get_db()
+        # The 'orders' table will store finalized, paid orders
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS orders (
+                order_id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                name TEXT,
+                email TEXT,
+                total_price REAL,
+                payment_status TEXT,
+                completion_status TEXT,
+                birth_date TEXT,
+                birth_time TEXT,
+                birth_place TEXT,
+                secondary_birth_date TEXT,
+                secondary_birth_time TEXT,
+                secondary_birth_place TEXT,
+                UNIQUE (order_id)
+            );
+        """)
+        # The 'order_items' table stores the details of each reading in the order
+        db.execute("""
+            CREATE TABLE IF NOT EXISTS order_items (
+                order_id TEXT NOT NULL,
+                item_id TEXT PRIMARY KEY,
+                reading_type TEXT,
+                reading_mode TEXT,
+                price REAL,
+                question TEXT,
+                FOREIGN KEY (order_id) REFERENCES orders(order_id)
+            );
+        """)
+        db.commit()
+
+# --- INITIAL SETUP ---
+# Initialize the database when the app starts
+init_db()
+
+
+# --- READING DATA & PADDLE LINKS ---
+# Dictionary of reading information (names and prices)
+READINGS = {
+    "natal": {"name": "Natal Chart Analysis", "pdf_price": 90, "video_price": 120},
+    "orientation": {"name": "Orientation / Career Guidance", "pdf_price": 70, "video_price": 90},
+    "love": {"name": "Love & Relationship Guidance", "pdf_price": 70, "video_price": 90},
+    "focus": {"name": "Other Focus Area", "pdf_price": 60, "video_price": 80},
+    "annual": {"name": "Annual Horoscope (Solar Return)", "pdf_price": 85, "video_price": 110},
+    "horary": {"name": "Horary Chart Analysis", "pdf_price": 55, "video_price": 75},
+    "synastry": {"name": "Synastry", "pdf_price": 95, "video_price": 125},
+}
+
+# **ACTION REQUIRED: PASTE YOUR 14 PADDLE CHECKOUT LINKS HERE**
+PADDLE_LINKS = {
+    "natal_pdf":       "https://pay.paddle.com/checkout/purchase?price_id=pri_01k8qevj415818w1pdqpw16pn7", # Based on your image
+    "natal_call":      "https://pay.paddle.com/checkout/purchase?price_id=pri_01k8qf43yqv9w8jg3ta61h5cfy", # Based on your image
+    
+    "orientation_pdf": "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_ORIENTATION_PDF_PRICE_ID]",
+    "orientation_call": "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_ORIENTATION_CALL_PRICE_ID]",
+    
+    "love_pdf":        "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_LOVE_PDF_PRICE_ID]",
+    "love_call":       "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_LOVE_CALL_PRICE_ID]",
+    
+    "focus_pdf":       "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_FOCUS_PDF_PRICE_ID]",
+    "focus_call":      "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_FOCUS_CALL_PRICE_ID]",
+    
+    "annual_pdf":      "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_ANNUAL_PDF_PRICE_ID]",
+    "annual_call":     "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_ANNUAL_CALL_PRICE_ID]",
+    
+    "horary_pdf":      "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_HORARY_PDF_PRICE_ID]",
+    "horary_call":     "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_HORARY_CALL_PRICE_ID]",
+    
+    "synastry_pdf":    "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_SYNASTRY_PDF_PRICE_ID]",
+    "synastry_call":   "https://pay.paddle.com/checkout/purchase?price_id=[YOUR_SYNASTRY_CALL_PRICE_ID]",
+}
+
+
+# --- BASIC PAGES ---
+@app.route("/", endpoint="home")
+def home():
+    # cart_count is always 0 now, as the cart is removed
+    return render_template("index.html", cart_count=0)
+
+@app.route("/about")
+def about():
+    return render_template("about.html", cart_count=0)
+
+@app.route("/readings")
+def readings():
+    # Pass both readings data and paddle links to the template
+    return render_template("readings.html", readings=READINGS, paddle_links=PADDLE_LINKS, cart_count=0)
+
+@app.route("/contact")
+def contact():
+    return render_template("contact.html", cart_count=0)
+
+@app.route("/faq")
+def faq():
+    return render_template("faq.html", cart_count=0)
+
+@app.route("/privacy")
+def privacy():
+    return render_template("privacy.html", cart_count=0)
+
+# Updated thankyou for direct checkout flow
+@app.route("/thankyou")
+def thankyou():
+    # Note: In a real integration, the webhook would trigger order logging, 
+    # and this page would simply confirm receipt.
+    status = request.args.get('status')
+    order_id = request.args.get('order_id')
+    
+    # Simple status display
+    if status == 'success':
+        flash('Payment confirmed and order received. Thank you.', 'success')
+    elif status == 'failed':
+        flash('Payment failed. Please try again or contact support.', 'error')
+    
+    return render_template("thankyou.html", 
+                           cart_count=0,
+                           status=status,
+                           order_id=order_id,
+                           video_session_needed=False) # Simplified, assumed false for now
+
+
+# --- DEPRECATED/REMOVED CART & MOCK PAYMENT ROUTES ---
+
+@app.route("/booking")
+def booking():
+    # DEPRECATED: Redirecting to readings page to start flow over
+    flash('The old booking page has been removed. Please select a reading below.', 'info')
+    return redirect(url_for("readings"))
+
+@app.route("/submit_booking", methods=["POST"])
+def submit_booking():
+    # DEPRECATED: Redirecting to readings page
+    return redirect(url_for("readings")) 
+
+@app.route("/add_to_cart", methods=["POST"])
+def add_to_cart():
+    # DEPRECATED: The cart is removed.
+    flash('The shopping cart has been removed. Please use the direct order buttons.', 'info')
+    return redirect(url_for("readings"))
+
+@app.route("/cart")
+def cart():
+    # DEPRECATED: The cart page is removed.
+    return redirect(url_for("readings"))
+
+@app.route("/remove_from_cart/<item_id>")
+def remove_from_cart(item_id):
+    # DEPRECATED: The cart is removed.
+    return redirect(url_for("readings"))
+
+@app.route("/data_entry")
+def data_entry():
+    # DEPRECATED: Data collection moves to a new pre-checkout form (not implemented yet)
+    return redirect(url_for("readings"))
+
+@app.route("/save_data", methods=["POST"])
+def save_data():
+    # DEPRECATED
+    return redirect(url_for("readings"))
+
+@app.route("/checkout")
+def checkout():
+    # DEPRECATED
+    return redirect(url_for("readings"))
+
+@app.route("/mock_payment_gateway")
+def mock_payment_gateway():
+    # DEPRECATED
+    return redirect(url_for("readings"))
+
+@app.route("/payment_success")
+def payment_success():
+    # DEPRECATED. A REAL PADDLE WEBHOOK WILL REPLACE THIS ROUTE LATER.
+    return redirect(url_for("readings"))
+
+@app.route("/clear_cart")
+def clear_cart():
+    # DEPRECATED
+    return redirect(url_for("readings"))
+
+# --- CONTACT FORM ---
+
+@app.route("/submit_contact", methods=["POST"])
+def submit_contact():
+    name = request.form.get("name", "").strip()
+    email = request.form.get("email", "").strip()
+    message = request.form.get("message", "").strip()
+
+    # Make sure data/ exists
+    Path(BASE_DIR / "data").mkdir(exist_ok=True)
+
+    # Append a CSV row safely (handles quotes/commas)
+    with open(BASE_DIR / "data" / "contact_messages.csv", "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([datetime.utcnow().isoformat(), name, email, message])
+
+    flash("Thank you — your message was sent.", "success")
+    return redirect(url_for("thankyou"))
+
+# --- PADDLE WEBHOOK ROUTE (Future Implementation) ---
+# NOTE: This route is for future implementation. The logic will be complex.
+# @app.route("/paddle-webhook", methods=["POST"])
+# def paddle_webhook():
+#     # 1. Verify Signature
+#     # 2. Parse JSON body (get custom data: reading_slug, reading_mode)
+#     # 3. Log order to SQLite (db.execute INSERT)
+#     # 4. Send fulfillment email
+#     # 5. Return 200 OK
+#     pass 
+
+
+if __name__ == "__main__":
+    print(">>> Initializing database...")
+    init_db()
+    print(">>> Running app...")
+    app.run(debug=True)
+
+----- static/css/styles.css -----
+/* =========================================
+   [ROOT VARIABLES & BASE SETTINGS]
+   ========================================= */
+:root{
+  --ink:#1a1a1a;
+  --ink-soft:#444;
+  --paper:#fff;
+  --accent:#2b0f35;
+  --accent-2:#5e4776;
+  --maxw:1200px;
+}
+*{ box-sizing:border-box; }
+html,body{ height:100%; }
+html{ scroll-behavior:smooth; }
+body{
+  margin:0;
+  color:var(--ink);
+  background:var(--paper);
+  font:16px/1.6 "Georgia","Times New Roman",serif;
+}
+/* General content wrapper: full width, centered */
+.wrap{ max-width:var(--maxw); margin:0 auto; padding:0 24px; }
+
+/* FIX: New class for left-aligned, max-width content (replacing centered .text-col) */
+.intro-content { max-width: 720px; } 
+
+/* Typography Helpers */
+.h-title,.title{ font-family:"Cormorant Garamond", Georgia, "Times New Roman", serif; font-weight:600; }
+.h-title{ font-size:clamp(36px,4.6vw,64px); line-height:1.05; margin:0 0 12px; }
+.h-lede{ max-width:44ch; }
+
+
+/* =========================================
+   [HEADER / NAVIGATION SECTION]
+   ========================================= */
+.topbar{
+  background:#fff;
+  border-bottom:1px solid #e8e6ef;
+  position:sticky; top:0; z-index:10;
+}
+.topbar .wrap{
+  display:flex; align-items:center; justify-content:space-between;
+  height:64px;
+}
+.brand{ display:inline-flex; align-items:center; gap:14px; text-decoration:none; color:inherit; }
+.logo{ height:38px; width:auto; display:block; }
+.brand-text{
+  letter-spacing:.06em; font-weight:600; font-size:18px;
+  font-family:"Cormorant Garamond", Georgia, "Times New Roman", serif;
+}
+.nav a{
+  text-decoration:none; color:var(--ink-soft); margin-left:26px;
+  font-size:14px; letter-spacing:.04em;
+}
+.nav a:first-child{ margin-left:0; }
+.nav a:hover{ color:var(--ink); }
+
+
+/* =========================================
+   [HERO SECTION - BANNER]
+   ========================================= */
+.hero{
+  position:relative;
+  height:55vh; min-height:480px;
+  isolation:isolate; scroll-snap-align:start;
+}
+/* FIX: Corrected the relative path for the image */
+.hero-media{
+  position:absolute; inset:0;
+  background-image:url("../images/front.jpg"); 
+  background-size:cover; background-position:center top;
+  filter:saturate(90%);
+  z-index:-2;
+}
+.hero-wash{
+  position:absolute; inset:0; z-index:-1; opacity:.92;
+  background:linear-gradient(
+    90deg,
+    color-mix(in srgb,var(--accent-2) 62%,transparent) 0%,
+    color-mix(in srgb,var(--accent-2) 62%,transparent) 46%,
+    color-mix(in srgb,var(--accent-2) 40%,transparent) 62%,
+    color-mix(in srgb,var(--accent-2) 18%,transparent) 78%,
+    transparent 100%
+  );
+}
+.hero-grid{
+  display:grid;
+  grid-template-columns:1fr 2fr;
+  align-items:center; height:100%;
+}
+.hero-left{ display:block; }
+.hero-right{ min-height:240px; }
+.hero-content{
+  height:100%; display:grid; align-content:center;
+  padding:24px 0; max-width:720px;
+}
+.title{
+  margin:0 0 8px 0; font-size:clamp(44px,6vw,84px); line-height:1.05; letter-spacing:.02em;
+  font-family:"Cormorant Garamond", Georgia, "Times New Roman", serif; font-weight:600;
+}
+.lede{
+  margin:0 0 28px 0; font-size:clamp(16px,2.1vw,22px);
+  color:#f5f3f8; text-shadow:0 1px 0 rgba(0,0,0,.25);
+}
+
+
+/* =========================================
+   [COMPONENTS - BUTTONS]
+   ========================================= */
+.cta-row{ display:flex; flex-wrap:wrap; gap:16px; }
+.btn{
+  display:inline-block; padding:14px 22px; border-radius:6px;
+  text-decoration:none; font-size:16px; line-height:1;
+  letter-spacing:.02em; transition:transform .08s ease, background-color .2s ease,
+  color .2s ease, box-shadow .2s ease, border-color .2s ease;
+  user-select:none; border:1px solid transparent;
+}
+.btn-primary{ background:var(--accent); color:#fff; box-shadow:0 6px 16px rgba(0,0,0,.18); }
+.btn-primary:hover{ transform:translateY(-1px); background:#3a1847; }
+.btn-secondary{ background:var(--accent-2); color:#fff; box-shadow:0 6px 16px rgba(0,0,0,.12); }
+.btn-secondary:hover{ transform:translateY(-1px); background:#4d3763; }
+.btn-ghost{
+  background:rgba(255,255,255,.08); color:#fff;
+  border-color:rgba(255,255,255,.3); backdrop-filter:blur(1px);
+}
+.btn-ghost:hover{
+  background:rgba(255,255,255,.16); border-color:rgba(255,255,255,.5);
+  transform:translateY(-1px);
+}
+.btn.disabled, button.disabled[disabled] {
+    opacity: 0.55 !important; cursor: not-allowed !important; transform: none !important; box-shadow: none !important;
+}
+/* Specific ghost button overrides for light backgrounds */
+.cart-summary .btn-ghost,
+.section.faq-preview .btn-ghost,
+.card.pricing .btn-ghost {
+    background: #fff; color: var(--accent); border-color: rgba(43, 15, 53, 0.2); 
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+.cart-summary .btn-ghost:hover, .section.faq-preview .btn-ghost:hover {
+    background: rgba(43, 15, 53, 0.06); transform: translateY(-1px);
+}
+.btn-row.dual{ display:flex; justify-content:flex-start; gap:0.75rem; margin-top:1rem; flex-wrap:wrap; }
+.btn-row.dual .btn{ flex:1 1 48%; text-align:center; }
+.card.pricing .btn-ghost:hover{
+  background: rgba(58,24,71,.06); border-color: rgba(58,24,71,.45); transform: translateY(-1px);
+}
+
+
+/* =========================================
+   [COMPONENTS - CARDS GRID]
+   ========================================= */
+.cards-grid{ display:grid; grid-template-columns:1fr 1fr; gap:24px; }
+.cards-grid.three{ grid-template-columns:repeat(3,1fr); }
+.card{
+  background:#fff; border:1px solid #e8e6ef; border-radius:10px;
+  padding:22px; text-decoration:none; color:inherit;
+  transition:transform .08s ease, box-shadow .2s ease, border-color .2s ease;
+}
+.card:hover{
+  transform:translateY(-2px); box-shadow:0 10px 24px rgba(0,0,0,.08); border-color:#d8d5e3;
+}
+.card-title{ margin:0 0 8px; font-size:18px; letter-spacing:.04em; }
+.card-text{ margin:0 0 10px; color:#333; font-size:15px; }
+.card-link{ color:#5b3d84; font-weight:600; font-size:14px; }
+
+
+/* =========================================
+   [COMPONENTS - STEPS FLOW]
+   ========================================= */
+.steps{
+  display:grid; grid-template-columns:repeat(3,1fr); gap:24px; position:relative; padding-bottom:20px; 
+  /* Centering the steps container itself */
+  max-width: 900px; margin: 40px auto 0;
+}
+.steps::before {
+    content: ''; position: absolute; top: 30px; left: 10%; right: 10%;
+    height: 2px; background: #e8e6ef; z-index: 1; pointer-events: none;
+}
+.step{
+  background:var(--paper); border:1px solid #e8e6ef; border-radius:10px;
+  padding:22px; position:relative; z-index:2;
+}
+.step-num{
+  position:absolute; top:-12px; left:-12px;
+  width:36px; height:36px; border-radius:8px; display:grid; place-items:center;
+  background:#5b3d84; color:#fff; font-weight:700; box-shadow:0 4px 10px rgba(0,0,0,.15);
+}
+.step-title{ margin:10px 0 6px; font-size:18px; }
+.step-text{ margin:0; font-size:15px; color:#333; }
+
+
+/* =========================================
+   [HOME - SECTIONS]
+   ========================================= */
+.section{ padding:56px 0; }
+.section.services{ background:#d1c6db; }
+.section.services .h-lede { max-width: 100%; }
+
+.section.home-readings{ background:#ffffff; padding-top:72px; padding-bottom:72px; }
+.readings-split {
+    display: grid; grid-template-columns: 1.2fr 1fr; gap: 40px; align-items: center; margin-top: 40px;
+}
+.readings-visual {
+    background: #fff; border: 1px solid #e8e6ef; border-radius: 12px;
+    padding: 30px; box-shadow: 0 4px 10px rgba(0,0,0,.05);
+}
+.chart-placeholder {
+    width: 100%; height: 300px;
+    background: url('../images/chart_example.png') no-repeat center center; 
+    background-size: contain; border: 1px solid #d8d5e3; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+}
+.chart-placeholder img { max-width: 100%; max-height: 100%; display: block; }
+
+.section.about-preview{ background:#f6f3f9; } 
+.section.testimonials{ background:#ffffff; } 
+
+/* Testimonials/Commitment to Quality Layout */
+.testimonials-list{ display:grid; grid-template-columns:repeat(3,1fr); gap:24px; }
+.testimonial{ background:#fff; border:1px solid #e8e6ef; border-radius:10px; padding:22px; margin:0; }
+.testimonial blockquote{ margin:0 0 10px 0; font-size:16px; color:#2b2b3b; font-style:italic; }
+.testimonial figcaption{ color:#666; font-size:14px; }
+
+
+/* FAQ Preview Layout - Aligned Left like the rest of the content */
+.section.faq-preview{ background:#f6f3f9; }
+
+.faq-list {
+    max-width: 100%; text-align: left; margin: 20px 0;
+}
+.faq-list details{
+  background:#fff; border:1px solid #e8e6ef; border-radius:10px;
+  padding:14px 16px; margin:0 0 12px 0;
+}
+.faq-list summary{ cursor:pointer; font-weight:600; outline:none; }
+.faq-list details[open]{ border-color:#d8d5e3; box-shadow:0 6px 16px rgba(0,0,0,.06); }
+.faq-list p{ margin:10px 0 0; color:#333; }
+
+
+/* CTA Strip Layout */
+.section.cta-strip{
+  background:linear-gradient(90deg,#5e4776,#2b0f35); color:#fff; padding:28px 0;
+}
+.cta-strip-inner{
+  display:flex; align-items:center; justify-content:space-between; gap:16px;
+}
+.cta-strip-text{ margin:0; font-size:18px; }
+
+
+/* =========================================
+   [PAGES - GENERAL]
+   ========================================= */
+.section.about-intro{ background:#ffffff; }
+.section.about-values{ background:#f6f3f9; }
+.section.readings-intro{ background:#ffffff; }
+.section.readings-grid{ background:#ffffff; padding:24px 0 72px; }
+.section.booking-options{ background:#ffffff; padding:56px 0 24px; }
+.section.booking-form{ background:#f6f3f9; padding:24px 0 72px; }
+.section.contact-info{ background:#ffffff; padding:56px 0 24px; }
+.section.contact-form{ background:#f6f3f9; padding:24px 0 72px; }
+.section.faq{ background:#ffffff; }
+.section.legal{ background:#ffffff; }
+.card.pricing .price{ font-size:22px; font-weight:700; margin:8px 0 14px; }
+.mini-list{ margin:10px 0 8px; padding-left:18px; color:#333; font-size:14px; }
+.mini-list li{ margin:4px 0; }
+
+
+/* =========================================
+   [PAGES - FORMS]
+   ========================================= */
+.form-wrap{ max-width:720px; }
+.form{
+  background:#fff; border:1px solid #e8e6ef; border-radius:10px; padding:22px;
+}
+.form-row{ margin-bottom:16px; }
+.form-row.grid2{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.form label{ display:block; font-weight:600; margin-bottom:6px; }
+.form input,.form select,.form textarea{
+  width:100%; padding:12px 12px; border:1px solid #d8d5e3; border-radius:8px; font:inherit;
+}
+.form input:focus,.form select:focus,.form textarea:focus{
+  outline:none; border-color:#5b3d84; box-shadow:0 0 0 3px rgba(91,61,132,.15);
+}
+.booking-buttons{ display:flex; gap:12px; margin-top:10px; flex-wrap:wrap; }
+
+
+/* =========================================
+   [CART SPECIFIC STYLING]
+   ========================================= */
+.cart-details .wrap { max-width: 1000px; }
+.cart-layout {
+    display: grid; grid-template-columns: 2fr 1fr; gap: 40px; align-items: start;
+}
+.cart-items-list { border-right: 1px solid #eee; padding-right: 40px; }
+.cart-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 15px 0; border-bottom: 1px solid #f0f0f0;
+}
+.cart-item:last-child { border-bottom: none; }
+.item-info strong { font-size: 1.1em; font-weight: 600; }
+.item-info p { margin: 5px 0 0 0; font-size: 0.9em; color: #555; }
+.item-price { text-align: right; font-weight: bold; font-size: 1.1em; }
+.remove-link { display: block; font-size: 0.8em; color: #a00; text-decoration: none; margin-top: 5px; }
+.remove-link:hover { text-decoration: underline; }
+.cart-summary {
+    background-color: #f9f9f9; padding: 25px; border: 1px solid #eee; border-radius: 5px;
+}
+.cart-summary h2 { margin-top: 0; margin-bottom: 20px; font-size: 1.5em; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+.summary-row { display: flex; justify-content: space-between; font-size: 1.1em; margin-bottom: 10px; }
+.summary-row.total {
+    font-size: 1.3em; font-weight: 700; margin-top: 20px; padding-top: 10px; border-top: 2px solid var(--accent);
+}
+
+
+/* =========================================
+   [NOTIFICATION POPUP STYLING]
+   ========================================= */
+.notification-popup {
+    position: fixed; top: 20px; right: 20px; background-color: var(--accent); color: white;
+    padding: 15px 20px; border-radius: 5px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    display: flex; align-items: center; gap: 15px; z-index: 1000; opacity: 0;
+    transform: translateY(-50px); transition: opacity 0.3s ease, transform 0.3s ease; pointer-events: none;
+}
+.notification-popup.show { opacity: 1; transform: translateY(0); pointer-events: all; }
+.popup-icon { font-size: 1.5em; color: #66ff66; line-height: 1; }
+.notification-popup a.btn-sm.btn-ghost {
+    background: rgba(255, 255, 255, 0.15); color: white; padding: 5px 10px; border-radius: 3px;
+    text-decoration: none; font-weight: 600; font-size: 0.9em; border: 1px solid transparent;
+}
+.notification-popup a.btn-sm.btn-ghost:hover {
+    background: rgba(255, 255, 255, 0.3); border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+
+/* =========================================
+   [RESPONSIVE & ACCESSIBILITY]
+   ========================================= */
+@media (min-width:900px){
+  body{ scroll-snap-type:y mandatory; }
+}
+@media (prefers-reduced-motion:reduce){
+  .svc{ animation:none !important; opacity:1 !important; }
+}
+@supports not (animation-timeline:view()){
+  .svc{ opacity:1; }
+}
+@media (max-width:900px){
+  .nav{ display:none; }
+  .brand-text{ font-size:16px; }
+  .hero-grid{ grid-template-columns:1fr; }
+  .hero-right{ display:none; }
+  .hero-content{ max-width:92%; }
+  .services-grid{ grid-template-columns:1fr; gap:32px; }
+  .cards-grid, .cards-grid.three{ grid-template-columns:1fr; }
+  .steps{ grid-template-columns:1fr; margin-top:20px auto 0; }
+  .steps::before { content: none; }
+  .testimonials-list{ grid-template-columns:1fr; }
+  .cta-strip-inner{ flex-direction:column; align-items:flex-start; }
+  .readings-split { grid-template-columns: 1fr; gap: 20px; }
+  .readings-visual { order: -1; padding: 20px; }
+  .cart-layout { grid-template-columns: 1fr; gap: 20px; }
+  .cart-items-list { border-right: none; padding-right: 0; border-bottom: 1px solid #eee; padding-bottom: 20px; }
+  .form-row.grid2{ grid-template-columns:1fr; }
+}
+@media (max-width:420px){
+  .h-title{ font-size:clamp(28px,8vw,40px); }
+  .btn{ padding:12px 18px; font-size:15px; }
+}
+@supports (padding:max(0px)){
+  .topbar .wrap{
+    padding-left:max(24px, env(safe-area-inset-left));
+    padding-right:max(24px, env(safe-area-inset-right));
+  }
+}
+/* =========================================
+   [MISC COMPONENTS & UTILITIES]
+   ========================================= */
+:target { scroll-margin-top: 90px; }
+.section { scroll-margin-top: 90px; }
+.text-col { max-width: 720px; margin: 0 auto; } /* Keeping text-col in place for other pages */
+
+----- static/js/bookings.js -----
+document.addEventListener('DOMContentLoaded', () => {
+  // Just basic setup, Cal integration removed
+  console.log("Bookings page loaded.");
+});
+
+
+----- templates/privacy.html -----
+{% extends "base.html" %}
+
+{% block title %}Privacy & Terms - Omen Astrology{% endblock %}
+
+{% block content %}
+  <!-- ========================================= -->
+  <!-- [LEGAL - PRIVACY & TERMS SECTION] -->
+  <!-- ========================================= -->
+  <section class="section legal">
+    <div class="wrap text-col">
+      <h1 class="h-title">Privacy & Terms</h1>
+
+      <h3>Data we collect</h3>
+      <p>Name, email, and birth details. These are used only to deliver your reading.</p>
+
+      <h3>Storage</h3>
+      <p>Data is stored securely and kept only as long as needed for your reading and follow-up.</p>
+
+      <h3>Your rights</h3>
+      <p>You can request deletion or a copy of your data at any time via email.</p>
+
+      <h3>Refunds</h3>
+      <p>If I have not started the work, refunds are possible. After delivery, refunds are not offered.</p>
+
+      <h3>Copyright</h3>
+      <p>Readings are for personal use. Please do not republish without permission.</p>
+    </div>
+  </section>
+
+{% endblock %}
+
+----- templates/cal_bootstrap.js -----
+// Define stub BEFORE loading Cal's embed.js
+window.Cal = window.Cal || function () {
+  (window.Cal.q = window.Cal.q || []).push(arguments);
+};
+
+// Load Cal script dynamically, then init
+(function () {
+  var s = document.createElement('script');
+  s.src = 'https://app.cal.com/embed/embed.js';
+  s.onload = function () {
+    try {
+      window.Cal('ui', { theme: 'light' });
+      console.log('Cal ready.');
+    } catch (e) {
+      console.error('Cal init error:', e);
+    }
+  };
+  s.onerror = function () {
+    console.error('Failed to load Cal embed.js');
+  };
+  document.head.appendChild(s);
+})();
+
+
+----- templates/mock_payment_gateway.html -----
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Payment Gateway Mock - Omen Astrology</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+
+<body>
+  <header class="topbar" style="background: #f7f7f7; border-bottom: 1px solid #ddd;">
+    <div class="wrap">
+      <span class="brand-text" style="color:#000;">[External Payment Gateway Mock]</span>
+    </div>
+  </header>
+
+  <section class="section" style="text-align: center;">
+    <div class="wrap form-wrap">
+      <h1 class="h-title" style="color: #3b0e41;">Secure Checkout</h1>
+      <p style="font-size: 1.2em; margin-bottom: 20px;">
+        Total Due: <strong>€{{ "%.2f" % total }}</strong>
+      </p>
+      <p>
+        <span style="font-size: 0.9em;">Order ID: {{ order_id }} | Email: {{ email }}</span>
+      </p>
+
+      <div class="form" style="max-width: 400px; margin: 2rem auto;">
+        
+        <p style="margin-bottom: 1.5rem; color: green; font-weight: bold;">
+          This simulates a secure hosted payment page (e.g., 2Checkout, Paddle, etc.).
+          No real payment will be processed.
+        </p>
+
+        <div class="form-row">
+          <label>Card Number</label>
+          <input type="text" value="XXXX XXXX XXXX 1234" disabled>
+        </div>
+        <div class="form-row">
+          <label>CVC / Expiry</label>
+          <input type="text" value="123 / 12/25" disabled>
+        </div>
+        
+        <a href="{{ success_url }}" class="btn btn-primary" style="width: 100%; margin-top: 1.5rem;">
+          Simulate Successful Payment
+        </a>
+        <a href="{{ fail_url }}" class="btn btn-ghost" style="width: 100%; margin-top: 1rem;">
+          Simulate Failed Payment
+        </a>
+      </div>
+      
+    </div>
+  </section>
+</body>
+</html>
+
+----- templates/base.html -----
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}OMEN ASTROLOGY{% endblock %}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+  {% block head_extras %}{% endblock %}
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="{{ url_for('home') }}">
+        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
+        <span class="brand-text">OMEN ASTROLOGY</span>
+      </a>
+      <nav class="nav">
+        <a href="{{ url_for('home') }}">HOME</a>
+        <a href="{{ url_for('about') }}">About</a>
+        <a href="{{ url_for('readings') }}">Readings</a>
+        {% if cart_count > 0 %}
+          <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a>
+        {% endif %}
+        <a href="{{ url_for('contact') }}">CONTACT</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- FLASH MESSAGES -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="flash-message flash-{{ category }}" 
+             style="padding: 10px; margin: 10px 0; border: 1px solid; 
+                    max-width: 1200px; margin-left: auto; margin-right: auto; 
+                    text-align: center;">
+          {{ message }}
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <!-- MAIN CONTENT -->
+  {% block content %}{% endblock %}
+
+  <!-- FOOTER -->
+  <div class="compliance-footer-strip" style="margin-top: 50px; padding: 20px 0; border-top: 1px solid #eee; text-align: center;">
+    <div class="wrap" style="max-width: 1200px; margin: 0 auto;">
+      <p style="font-size: 0.8em; color: #777;">
+        &copy; 2025 Omen Astrology. All Rights Reserved.
+        <span style="display: block; margin-top: 5px;">
+            <a href="{{ url_for('privacy') }}" style="color: #444; margin: 0 10px; text-decoration: none;">Privacy Policy</a> | 
+            <a href="{{ url_for('faq') }}#refund-policy" style="color: #444; margin: 0 10px; text-decoration: none;">Refund Policy / FAQ</a> |
+            <a href="{{ url_for('contact') }}" style="color: #444; margin: 0 10px; text-decoration: none;">Support</a>
+        </span>
+      </p>
+    </div>
+  </div>
+
+  {% block scripts %}{% endblock %}
+
+</body>
+</html>
+
+
+----- templates/about.html -----
+{% extends "base.html" %}
+
+{% block title %}About Omen - Omen Astrology{% endblock %}
+
+{% block content %}
+
+  <!-- ========================================= -->
+  <!-- [ABOUT - INTRO SECTION] -->
+  <!-- ========================================= -->
+  <section class="section about-intro">
+    <div class="wrap text-col">
+      <h1 class="h-title">About Omen</h1>
+      <p>Omen is built on a simple belief: Astrology is a language of patterns. It does not force events. It helps you name what is active in your life, so you can act with more clarity.</p>
+      <p>I use Traditional Astrology. I focus on clear judgment, activation of Houses, and how different parts of life connect. Each reading is personal and written in plain English.</p>
+    </div>
+  </section>
+
+  <!-- ========================================= -->
+  <!-- [ABOUT - VALUES SECTION] -->
+  <!-- ========================================= -->
+  <section class="section about-values">
+    <div class="wrap cards-grid three">
+      <div class="card">
+        <h3 class="card-title">Clarity</h3>
+        <p class="card-text">Direct language and practical guidance. No fluff.</p>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Privacy</h3>
+        <p class="card-text">Your data and chart stay confidential.</p>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Integrity</h3>
+        <p class="card-text">No empty promises. The goal is your understanding and action.</p>
+      </div>
+    </div>
+  </section>
+{% endblock %}
+
+----- templates/booking.html -----
+{% extends "base.html" %}
+
+{% block title %}Order PDF Reading - Omen Astrology{% endblock %}
+
+{% block content %}
+  <section class="section">
+    <div class="wrap text-col">
+      <h1 class="h-title">Order PDF Reading</h1>
+      <p class="h-lede">Fill in your details below to order a written PDF reading. For live video consultations, please <a href="#live-sessions">book directly through Cal.com</a>.</p>
+    </div>
+  </section>
+
+  <section id="form" class="section booking-form">
+    <div class="wrap form-wrap">
+      <form action="{{ url_for('submit_booking') }}" method="post" class="form">
+        
+        <div class="form-row">
+          <label for="readingType">Reading Type</label>
+          <select id="readingType" name="reading" required>
+            <option value="natal"       {{ 'selected' if q_reading=='natal'       else '' }}>Natal Chart Analysis (€90)</option>
+            <option value="orientation" {{ 'selected' if q_reading=='orientation' else '' }}>Orientation / Career Guidance (€70)</option>
+            <option value="love"        {{ 'selected' if q_reading=='love'        else '' }}>Love &amp; Relationship Guidance (€70)</option>
+            <option value="focus"       {{ 'selected' if q_reading=='focus'       else '' }}>Other Focus Area (€60)</option>
+            <option value="annual"      {{ 'selected' if q_reading=='annual'      else '' }}>Annual Horoscope (€85)</option>
+            <option value="horary"      {{ 'selected' if q_reading=='horary'      else '' }}>Horary Chart Analysis (€55)</option>
+            <option value="synastry"    {{ 'selected' if q_reading=='synastry'    else '' }}>Synastry (€95)</option>
+          </select>
+        </div>
+
+        <div class="form-row grid2">
+          <div>
+            <label for="name">Full Name</label>
+            <input id="name" name="name" type="text" required>
+          </div>
+          <div>
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" required>
+          </div>
+        </div>
+
+        <div class="form-row grid2">
+          <div>
+            <label for="birthDate">Date of Birth</label>
+            <input id="birthDate" name="birth_date" type="date">
+          </div>
+          <div>
+            <label for="birthTime">Time of Birth (if known)</label>
+            <input id="birthTime" name="birth_time" type="time">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <label for="birthPlace">Place of Birth</label>
+          <input id="birthPlace" name="birth_place" type="text" placeholder="City, Country">
+        </div>
+
+        <div class="form-row">
+          <label for="question">Notes / Focus Area</label>
+          <textarea id="question" name="question" rows="5" placeholder="Tell me what you want to focus on (optional)"></textarea>
+        </div>
+
+        <button class="btn btn-primary" type="submit">Submit Order</button>
+        
+        <p style="margin-top: 1rem; font-size: 14px; color: #666;">
+          You'll receive payment instructions via email within 24 hours.
+        </p>
+      </form>
+    </div>
+  </section>
+
+  <section id="live-sessions" class="section booking-options">
+    <div class="wrap text-col">
+      <h2 class="h-title">Live Video Consultations</h2>
+      <p>Prefer to speak directly? Book a live video consultation through Cal.com. Select your reading type below:</p>
+      
+      <div class="booking-buttons">
+        <a href="https://cal.com/omen-traditional-astrology-1fueeq/natal-chart-live-consultation" 
+           target="_blank" rel="noopener" class="btn btn-ghost">
+          Natal Chart Live (€90)
+        </a>
+        <a href="https://cal.com/omen-traditional-astrology-1fueeq/orientation-career-guidance-live-consultation" 
+           target="_blank" rel="noopener" class="btn btn-ghost">
+          Orientation / Career Live (€70)
+        </a>
+        <a href="https://cal.com/omen-traditional-astrology-1fueeq/love-relationship-guidance-live-consultation" 
+           target="_blank" rel="noopener" class="btn btn-ghost">
+          Love &amp; Relationship Live (€70)
+        </a>
+        <a href="https://cal.com/omen-traditional-astrology-1fueeq/other-focus-area-live-consultation" 
+           target="_blank" rel="noopener" class="btn btn-ghost">
+          Other Focus Area Live (€60)
+        </a>
+        <a href="https://cal.com/omen-traditional-astrology-1fueeq/annual-horoscope-solar-return-live-consultation" 
+           target="_blank" rel="noopener" class="btn btn-ghost">
+          Annual Horoscope Live (€85)
+        </a>
+        <a href="https://cal.com/omen-traditional-astrology-1fueeq/horary-chart-analysis-live-consultation" 
+           target="_blank" rel="noopener" class="btn btn-ghost">
+          Horary Live (€55)
+        </a>
+        <a href="https://cal.com/omen-traditional-astrology-1fueeq/synastry-live-consultation" 
+           target="_blank" rel="noopener" class="btn btn-ghost">
+          Synastry Live (€95)
+        </a>
+      </div>
+    </div>
+  </section>
+{% endblock %}
+
+----- templates/cart.html -----
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Your Cart - Omen Astrology</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="{{ url_for('home') }}">
+        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
+        <span class="brand-text">OMEN ASTROLOGY</span>
+      </a>
+      <nav class="nav">
+        <a href="{{ url_for('home') }}">HOME</a>
+        <a href="{{ url_for('about') }}">About</a>
+        <a href="{{ url_for('readings') }}">Readings</a>
+        {% if cart_count > 0 %} 
+            <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a> 
+        {% endif %}
+        <a href="{{ url_for('contact') }}">CONTACT</a>
+      </nav>
+    </div>
+  </header>
+
+  <section class="section cart-intro">
+    <div class="wrap text-col">
+      <h1 class="h-title">Your Cart</h1>
+    </div>
+  </section>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="wrap flash-container">
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+
+  <section class="section cart-details">
+    <div class="wrap">
+      {% if not cart_items %}
+        <div class="empty-cart-message">
+          <p>Your cart is empty. Please visit the <a href="{{ url_for('readings') }}">Readings</a> page to add an item.</p>
+        </div>
+      {% else %}
+        
+        <div class="cart-layout">
+          <div class="cart-items-list">
+            {% for item in cart_items %}
+            <div class="cart-item">
+              <div class="item-info">
+                <strong>{{ item.name }}</strong>
+                <p>Format: {{ item.reading_mode.capitalize() }}</p>
+              </div>
+              <div class="item-price">
+                €{{ "%.2f" % item.price }}
+                <a href="{{ url_for('remove_from_cart', item_id=item.id) }}" class="remove-link" title="Remove Item">Remove</a>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          
+          <div class="cart-summary sticky-sidebar">
+            <h2>Order Summary</h2>
+            <div style="text-align: center; margin-bottom: 20px;">
+                <a href="{{ url_for('clear_cart') }}" class="btn btn-ghost" 
+                   onclick="return confirm('Are you sure you want to clear your entire cart and remove all details?')" 
+                   style="padding: 8px 15px; font-size: 0.9em;">
+                    Empty Cart
+                </a>
+            </div>
+            <div class="summary-row total">
+              <strong>Total Price:</strong>
+              <span>€{{ "%.2f" % total_price }}</span>
+            </div>
+            
+            <a href="{{ url_for('readings') }}" class="btn btn-ghost" style="width: 100%; margin-bottom: 1rem;">Add Another Reading</a>
+
+            {% if not data_is_filled %}
+            <div style="background: #fff8f8; border: 1px solid #ff4d4d; padding: 15px; border-radius: 5px; margin-bottom: 1rem;">
+                <p style="color: #ff4d4d; margin: 0; font-weight: bold;">&#9888; Required Details Missing!</p>
+                <p style="font-size: 0.9em; margin: 5px 0 0 0;">Fill the chart details and questions for all readings below.</p>
+            </div>
+            {% endif %}
+
+            <a href="{{ url_for('data_entry') }}" class="btn btn-primary" style="width: 100%;">
+              1. Fill/Update Chart Details
+            </a>
+            
+            {% if data_is_filled %}
+            <a href="{{ url_for('checkout') }}" class="btn btn-secondary" style="width: 100%; margin-top: 1rem;">
+              2. Proceed to Payment (€{{ "%.2f" % total_price }})
+            </a>
+            {% else %}
+            <button class="btn btn-secondary disabled" disabled style="width: 100%; margin-top: 1rem; opacity: 0.5;">
+              2. Proceed to Payment (Fill Details First)
+            </button>
+            {% endif %}
+
+            <p style="margin-top: 20px; font-size: 14px; color: #666;">
+              * If your order includes a Live Consultation, you will schedule your slot immediately after payment is confirmed.
+            </p>
+
+          </div>
+        </div>
+      {% endif %}
+    </div>
+  </section>
+
+</body>
+</html>
+
+----- templates/contact.html -----
+{% extends "base.html" %}
+
+{% block title %}Contact - Omen Astrology{% endblock %}
+
+{% block content %}
+  <section class="section contact-info">
+    <div class="wrap text-col">
+      <h1 class="h-title">Contact</h1>
+      <p>Questions before you book?
+        Write to <strong>omentraditionalastrology@gmail.com</strong> and you’ll get a reply within 24 - 48 hours.</p>
+      <p>For bookings, please use the <a href="{{ url_for('readings') }}">Readings</a> page so we can track your request.</p>
+    </div>
+  </section>
+
+  <section class="section contact-form">
+    <div class="wrap form-wrap">
+      
+      <form class="form" action="{{ url_for('submit_contact') }}" method="post">
+        <div class="form-row">
+          <label>Name</label>
+          <input type="text" name="name" required>
+        </div>
+        <div class="form-row">
+          <label>Email</label>
+          <input type="email" name="email" required>
+        </div>
+        <div class="form-row">
+          <label>Message</label>
+          <textarea rows="6" name="message" required></textarea>
+        </div>
+        <button class="btn btn-primary" type="submit">Send</button>
+      </form>
+      
+    </div>
+  </section>
+
+{% endblock %}
+
+----- templates/data_entry.html -----
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Enter Chart Details - Omen Astrology</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+
+<body>
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="{{ url_for('home') }}">
+        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
+        <span class="brand-text">OMEN ASTROLOGY</span>
+      </a>
+      <nav class="nav">
+        <a href="{{ url_for('home') }}">HOME</a>
+        <a href="{{ url_for('about') }}">About</a>
+        <a href="{{ url_for('readings') }}">Readings</a>
+        {% if cart_count > 0 %} 
+            <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a> 
+        {% endif %}
+        <a href="{{ url_for('contact') }}">CONTACT</a>
+      </nav>
+    </div>
+  </header>
+
+  <section class="section">
+    <div class="wrap text-col">
+      <h1 class="h-title">1. Enter Order Details</h1>
+      <p class="h-lede">
+        We need your contact information and chart data. **This data is typically the same for all readings in your cart.** If you need a reading for a different person, please place a separate order.
+      </p>
+    </div>
+  </section>
+
+  <section class="section booking-form">
+    <div class="wrap form-wrap">
+      
+      <form id="dataEntryForm" action="{{ url_for('save_data') }}" method="post" class="form">
+        
+        <h2 style="color: #3b0e41;">Client Contact & Birth Data (Primary Person)</h2>
+        <p class="form-text" style="margin-top: 0;">* Required for all chart-based readings (Natal, Annual, etc.)</p>
+        
+        <div class="form-row grid2">
+          <div>
+            <label for="customerName">Full Name</label>
+            <input id="customerName" name="customer_name" type="text" 
+                   value="{{ customer_info.name or '' }}" required>
+           </div>
+          <div>
+            <label for="customerEmail">Email</label>
+            <input id="customerEmail" name="customer_email" type="email" 
+                   value="{{ customer_info.email or '' }}" required>
+          </div>
+        </div>
+
+        <div class="form-row grid2">
+          <div>
+            <label for="mainBirthDate">Date of Birth</label>
+             <input id="mainBirthDate" name="main_birth_date" type="date"
+                    value="{{ customer_info.birth_date or '' }}" required>
+          </div>
+          <div>
+            <label for="mainBirthTime">Time of Birth (if known)</label>
+            <input id="mainBirthTime" name="main_birth_time" type="time"
+                   value="{{ customer_info.birth_time or '' }}">
+          </div>
+        </div>
+
+        <div class="form-row">
+           <label for="mainBirthPlace">Place of Birth</label>
+          <input id="mainBirthPlace" name="main_birth_place" type="text" placeholder="City, Country"
+                 value="{{ customer_info.birth_place or '' }}" required>
+        </div>
+        
+        
+        <hr style="margin: 3rem 0;">
+
+        <div class="form-toggle-section">
+            <h2 style="color: #3b0e41;">Secondary Person's Data (Optional)</h2>
+            {% if synastry_in_cart %}
+                <p class="form-text" style="color:red; font-weight:bold;">* REQUIRED for Synastry Reading(s) in your cart.</p>
+            {% else %}
+                <p class="form-text">Optional: Only fill this out if your reading requires a second person's chart (e.g., relationship timing).</p>
+            {% endif %}
+            
+            <div class="form-row grid2">
+              <div>
+                <label for="secondaryBirthDate">Date of Birth (Secondary)</label>
+                 <input id="secondaryBirthDate" name="secondary_birth_date" type="date"
+                        value="{{ customer_info.secondary_birth_date or '' }}">
+              </div>
+              <div>
+                <label for="secondaryBirthTime">Time of Birth (Secondary)</label>
+                <input id="secondaryBirthTime" name="secondary_birth_time" type="time"
+                       value="{{ customer_info.secondary_birth_time or '' }}">
+              </div>
+            </div>
+
+            <div class="form-row">
+               <label for="secondaryBirthPlace">Place of Birth (Secondary)</label>
+              <input id="secondaryBirthPlace" name="secondary_birth_place" type="text" placeholder="City, Country"
+                     value="{{ customer_info.secondary_birth_place or '' }}">
+            </div>
+        </div>
+
+        <hr style="margin: 3rem 0;">
+
+        <h2 style="color: #3b0e41;">Reading-Specific Questions</h2>
+        <p class="form-text">* Please provide the focus or question for *each* reading in your cart.</p>
+
+        {% for item in cart_items %}
+        <div class="reading-details-block" style="border-left: 5px solid #666; padding-left: 20px; margin-bottom: 2.5rem;">
+            <h3 style="margin-top: 0;">{{ item.name }} ({{ item.reading_mode.capitalize() }})</h3>
+            
+            <div class="form-row">
+              <label for="question_{{ item.id }}">Your Question / Focus Area (Required for this reading)</label>
+              <textarea id="question_{{ item.id }}" name="question_{{ item.id }}" rows="4" required
+                        placeholder="What specific outcome or guidance are you seeking with this reading?">{{ cart_data.get(item.id, {}).question or '' }}</textarea>
+            </div>
+        </div>
+        {% endfor %}
+
+        <div class="btn-row" style="margin-top: 3rem;">
+          <button class="btn btn-primary" type="submit" style="width: 100%;">
+            Save Details & Go to Cart
+          </button>
+        </div>
+      </form>
+    </div>
+  </section>
+</body>
+</html>
+
+----- templates/faq.html -----
+{% extends "base.html" %}
+
+{% block title %}FAQ - Omen Astrology{% endblock %}
+
+{% block content %}
+
+  <!-- ========================================= -->
+  <!-- [FAQ - LIST SECTION] -->
+  <!-- ========================================= -->
+  <section class="section faq">
+    <div class="wrap faq-wrap">
+      <h1 class="h-title">FAQ</h1>
+
+      <details class="faq-item" open>
+        <summary>Do you use AI?</summary>
+        <p>No. All readings are written by hand.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>How long does it take?</summary>
+        <p>Written readings: 3 - 10 days depending on type. Live calls: next available slot.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>What if I don’t know my exact birth time?</summary>
+        <p>I can still read for you. I’ll explain limits and what we can do.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Do you predict exact events?</summary>
+        <p>I focus on what is active in your life and how to work with it. I avoid exact timing promises.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Are refunds possible?</summary>
+        <p>If I have not started the work, yes. After delivery, refunds are not offered.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Is my data private?</summary>
+        <p>Yes. Your data is never shared with third parties.</p>
+      </details>
+    </div>
+  </section>
+
+{% endblock %}
+
+----- templates/index.html -----
+{% extends "base.html" %}
+
+{% block title %}About - Omen Astrology{% endblock %}
+
+{% block content %}
+  <section class="hero">
+    <div class="hero-media" aria-hidden="true"></div>
+    <div class="hero-wash" aria-hidden="true"></div>
+
+    <div class="wrap">
+      <div class="hero-grid">
+        <div class="hero-left">
+          <div class="hero-content">
+            <h1 class="title">Omen Astrology</h1>
+            <p class="lede">
+  
+                Clarity, timing, and practical guidance — written or live consultations.
+</p>
+            <div class="cta-row">
+              <a class="btn btn-primary" href="{{ url_for('readings') }}">Get a Reading</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-right" aria-hidden="true"></div>
+      </div>
+    
+      </div>
+  </section>
+
+
+  <section id="services" class="section services">
+    <div class="wrap services-grid">
+
+      <div class="services-intro">
+        <h2 class="h-title">Readings &amp;<br>Consultations</h2>
+        <p class="h-lede">
+          Unlike simple fortune-telling, this discipline works on the principle
+          that the movements of the cosmos reflect, but do not cause, the powerful
+    
+              momentum of existence.
+By applying these universal patterns to your
+          personal chart, we offer grounded, reasonable interpretations that
+          deliver self-reflective insight - not just prediction - as the primary
+          purpose of every reading.
+</p>
+      </div>
+
+      <div class="cards-grid">
+        <a class="card" href="{{ url_for('readings') }}#natal">
+          <h3 class="card-title">Natal Chart Analysis</h3>
+          <p class="card-text">Temperament, talents, challenges, and current focus.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a 
+class="card" href="{{ url_for('readings') }}#orientation">
+          <h3 class="card-title">Orientation / Career Guidance</h3>
+          <p class="card-text">Strengths, direction, and timing for study/work moves.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a class="card" href="{{ url_for('readings') }}#love">
+          <h3 class="card-title">Love &amp;
+Relationship Guidance</h3>
+          <p class="card-text">Patterns in love, readiness, and next steps.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a class="card" href="{{ url_for('readings') }}#focus">
+          <h3 class="card-title">Other Focus Area</h3>
+          <p class="card-text">Family/Home, finances, health themes, relocation, studies, travel…</p>
+      
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a class="card" href="{{ url_for('readings') }}#annual">
+          <h3 class="card-title">Annual Horoscope (Solar Return)</h3>
+          <p class="card-text">Key themes, months, and practical timing for the year.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+    
+        <a class="card" href="{{ url_for('readings') }}#horary">
+          <h3 class="card-title">Horary Chart Analysis</h3>
+          <p class="card-text">One clear question, one focused judgment.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a class="card" href="{{ url_for('readings') }}#synastry">
+          <h3 class="card-title">Synastry</h3>
+      
+          <p class="card-text">Two charts compared: flow, friction, and priorities.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+      </div>
+
+    </div>
+  </section>
+
+
+<section class="section home-readings">
+    <div class="wrap">
+      <h2 class="h-title">Start Your Journey</h2>
+      
+      <div class="readings-split">
+    
+        
+        <div class="readings-visual">
+            <h3 class="card-title" style="margin-top:0;">Your Blueprint: The Natal Chart</h3>
+            <p class="card-text">Every reading begins by accurately charting your moment of birth.
+This is the foundation of all focused analysis.</p>
+            <div class="chart-placeholder">
+                <img src="{{ url_for('static', filename='images/natal_chart_example.png') }}" alt="Example of a Natal Astrology Chart"> 
+            </div>
+            <a class="btn btn-primary" href="{{ url_for('readings') }}" style="margin-top: 20px; width:100%;">Explore All Services</a>
+        </div>
+
+                
+        <div>
+            <p class="h-lede" style="margin-bottom: 24px;">We offer custom, detailed analysis across various astrological disciplines.
+Here are the two most popular entry points:</p>
+            
+            <div class="cards-grid">
+              <div class="card">
+                <h4 class="card-title">Foundational Natal Analysis</h4>
+                <p class="card-text">A foundational deep dive into your potential, 
+temperament, and life purpose. Essential starting point.</p>
+                <a class="card-link" href="{{ url_for('readings') }}#natal">View Details →</a>
+              </div>
+              <div class="card">
+                <h4 class="card-title">Synastry & Relationships</h4>
+              
+                  <p class="card-text">Understanding the dynamics between your chart and a partner's—harmonious flow and friction points.</p>
+                <a class="card-link" href="{{ url_for('readings') }}#synastry">View Details →</a>
+              </div>
+            </div>
+            
+            <div class="cta-row" style="margin-top: 
+30px;">
+                <a class="btn btn-ghost" href="{{ url_for('readings') }}">View Full Price List</a>
+            </div>
+
+        </div>
+
+      </div>
+    </div>
+</section>
+
+
+<section class="section about-preview">
+  <div class="wrap">
+    
+    <div class="intro-content"> 
+      <h2 class="h-title">Our Process & Commitment</h2>
+      <p class="h-lede">
+        Omen is a small team of practicing astrologers (my wife and I). We focus on delivering traditional, reliable guidance. Every reading is written with care, focusing on timing, patterns, and practical next steps — always personal, never automated.
+      </p>
+    </div>
+
+    <div class="steps" style="margin-top: 40px; margin-bottom: 40px;">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h3 class="step-title">Submit Your Request</h3>
+        <p class="step-text">Choose the type of reading and submit your birth data and questions.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h3 class="step-title">Chart Preparation</h3>
+        <p class="step-text">Our team studies your chart and focuses on the most critical themes and timing.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h3 class="step-title">Personal Delivery</h3>
+        <p class="step-text">You receive a clear, practical reading with concrete insights and next steps.</p>
+      </div>
+    </div>
+
+    <div class="intro-content"> 
+      <p>
+        We are focused on delivering the highest quality and most insightful astrological advice possible. Your honest feedback is invaluable as we grow. Every client's experience helps refine our commitment to clarity and precision.
+      </p>
+      <p style="font-style: italic; color: #555;">"I will reach out to you directly for feedback after your reading is delivered."</p>
+      
+      <div class="cta-row" style="margin-top: 30px;">
+          <a class="btn btn-primary" href="{{ url_for('about') }}">Meet the Team (About Us)</a>
+          <a class="btn btn-ghost" href="{{ url_for('contact') }}">Contact Us With Questions</a>
+      </div>
+    </div>
+
+  </div> </section> <section class="section testimonials">
+  <div class="wrap">
+    
+    <div class="intro-content"> 
+      <h2 class="h-title">What Clients Are Saying</h2>
+      <p class="h-lede">
+        Client feedback is essential. We are currently collecting our first round of reviews from recent clients.
+      </p>
+    </div>
+
+    <div class="testimonials-list" style="margin-top: 40px;">
+      
+      <div class="testimonial">
+        <blockquote>
+          "A very insightful and clear reading. It provided the practical guidance I was looking for and helped me understand my current situation."
+        </blockquote>
+        <figcaption>
+          — C.M.
+        </figcaption>
+      </div>
+
+      <div class="testimonial">
+        <blockquote>
+          "The annual horoscope was incredibly detailed and accurate. It's been a valuable map for the year. Highly recommend the PDF report."
+        </blockquote>
+        <figcaption>
+          — J. Alverez
+        </figcaption>
+      </div>
+
+      <div class="testimonial">
+        <blockquote>
+          "I was new to traditional astrology, and the 'Other Focus Area' reading was perfect. It directly addressed my questions about my career."
+        </blockquote>
+        <figcaption>
+          — S. Lee
+        </figcaption>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+
+<section class="section faq-preview">
+  <div class="wrap">
+    <div class="intro-content"> <h2 class="h-title">Quick Answers (FAQ)</h2>
+  
+          <div class="faq-list">
+        <details>
+          <summary>What information do you need from me?</summary>
+          <p>Birth date, time, and location.
+For horary, a clear question.</p>
+        </details>
+        <details>
+          <summary>How are readings delivered?</summary>
+          <p>Written PDF by default;
+live sessions are available on request.</p>
+        </details>
+        <details>
+          <summary>How long does it take?</summary>
+          <p>Most written readings are delivered within 5–7 days.</p>
+        </details>
+      </div>
+      <a class="btn btn-ghost" href="{{ url_for('faq') }}">See all FAQs</a>
+    </div>
+
+      </div>
+</section>
+
+<section class="section cta-strip">
+  <div class="wrap cta-strip-inner">
+    <p class="cta-strip-text">Ready to begin?
+Start with a Written Reading.</p>
+    <a class="btn btn-primary" href="{{ url_for('readings') }}">Get a Reading</a>
+  </div>
+</section>
+{% endblock %}
+
+----- templates/readings.html -----
+{% extends "base.html" %}
+
+{% block title %}Readings & Prices - Omen Astrology{% endblock %} 
+
+
+{% block content %}
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="flash-message flash-{{ category }}" style="padding: 10px; margin: 10px 0; border: 1px solid; max-width: 1200px; margin-left: auto; margin-right: auto; text-align: center;">
+          {{ message }}
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <section class="section readings-intro">
+    <div class="wrap text-col">
+      <h1 class="h-title">Readings & Prices</h1>
+      <p>Select the reading that fits your need. Prices are transparent. Each reading is hand-written. No AI, no templates.</p>
+    </div>
+  </section>
+
+  <section class="section readings-grid">
+    <div class="wrap cards-grid">
+
+      {% for key, reading in readings.items() %}
+      <article id="{{ key }}" class="card pricing">
+        <h3 class="card-title">{{ reading.name }}</h3>
+        <p class="card-text">
+          {% if key == 'natal' %}A full look at temperament, behavior, relationships, money, career, family/Home, study, travel, and current focus.
+          {% elif key == 'orientation' %}Strengths and work style, direction for study/work, and better timing for changes or new starts.
+          {% elif key == 'love' %}What is active now in love, patterns to watch, realistic next steps and timing.
+          {% elif key == 'focus' %}One area of life (family/Home, finances, health themes, relocation, studies, travel, etc.). Sharp, practical guidance.
+          {% elif key == 'annual' %}One year overview (birthday to birthday): active Houses, key months, and practical timing notes.
+          {% elif key == 'horary' %}For a single, clear question (work, money, love, moving, lost items, timing, etc.). Focused judgment and reasoning.
+          {% elif key == 'synastry' %}Two charts compared: how the bond works in practice – flow, friction, and where to invest effort.
+          {% endif %}
+        </p>
+        
+        <div class="btn-row dual">
+          <a class="btn btn-primary" href="{{ paddle_links[key + '_pdf'] }}" 
+             style="width: 50%; text-align: center;">
+             PDF Report (€{{ reading.pdf_price }})
+          </a>
+
+          <a class="btn btn-ghost" href="{{ paddle_links[key + '_call'] }}"
+             style="width: 50%; text-align: center;">
+             Live Call (€{{ reading.video_price }})
+          </a>
+        </div>
+      </article>
+      {% endfor %}
+
+    </div>
+  </section>
+{% endblock %}
+
+----- templates/thankyou.html -----
+{% extends "base.html" %}
+
+{% block title %}Thank You - Omen Astrology{% endblock %}
+
+{% block content %}
+  <section class="section thankyou">
+    <div class="wrap text-col">
+      {% if status == 'paid' %}
+        <h1 class="h-title" style="color: green;">Order Confirmed!</h1>
+        <p class="h-lede">
+          Thank you for your purchase. Your order details have been permanently recorded.
+        </p>
+        <p>
+          <strong>Order ID: {{ order_id }}</strong><br>
+          A confirmation will be sent to your email shortly.
+        </p>
+
+        {% if video_session_needed %}
+          <hr style="margin: 2rem 0;">
+          <div style="background: #f0f8ff; border: 1px solid #3b0e41; padding: 20px; border-radius: 5px;">
+            <h2 style="margin-top: 0; color: #3b0e41;">&#10003; Next Step: Schedule Your Consultation</h2>
+            <p>Your payment is complete, but you still need to book your time slot for the live video session(s).</p>
+            <a href="https://cal.com/omen-traditional-astrology-1fueeq" target="_blank" class="btn btn-primary" style="background: #3b0e41; color: white;">
+              Go to Cal.com to Schedule Now
+            </a>
+          </div>
+        {% else %}
+          <p style="margin-top: 2rem;">
+            For your PDF reading(s), please allow {{ "5-7" if order_id and not video_session_needed else "a few" }} days for delivery. You will receive the file via email.
+          </p>
+        {% endif %}
+
+      {% elif status == 'failed' %}
+        <h1 class="h-title" style="color: red;">Payment Failed</h1>
+        <p class="h-lede">
+          We were unable to process your payment. Please return to the cart and try again, or contact us if the issue persists.
+        </p>
+        <a href="{{ url_for('cart') }}" class="btn btn-secondary">Return to Cart</a>
+        
+      {% elif status == 'error' %}
+        <h1 class="h-title" style="color: red;">Order Error</h1>
+        <p class="h-lede">
+          An unexpected error occurred during the finalization of your order. Please contact us immediately with your order ID (if you have one).
+        </p>
+        <a href="{{ url_for('contact') }}" class="btn btn-secondary">Contact Support</a>
+        
+      {% else %}
+        <h1 class="h-title">Thank You!</h1>
+        <p class="h-lede">
+          Your message has been sent successfully, or you've completed a booking step. We appreciate you reaching out!
+        </p>
+      {% endif %}
+
+    </div>
+  </section>
+{% endblock %}
+

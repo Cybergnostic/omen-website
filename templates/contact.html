@@ -1,38 +1,14 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Contact - Omen Astrology</title>
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
-</head>
-<body>
+{% extends "base.html" %}
 
-  <header class="topbar">
-    <div class="wrap">
-      <a class="brand" href="{{ url_for('home') }}">
-        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
-        <span class="brand-text">OMEN ASTROLOGY</span>
-      </a>
-      <nav class="nav">
-        <a href="{{ url_for('home') }}">HOME</a>
-        <a href="{{ url_for('about') }}">About</a>
-        <a href="{{ url_for('readings') }}">Readings</a>
-        {% if cart_count > 0 %} 
-            <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a> 
-        {% endif %}
-        <a href="{{ url_for('contact') }}">CONTACT</a>
-      </nav>
-    </div>
-  </header>
+{% block title %}Contact - Omen Astrology{% endblock %}
 
+{% block content %}
   <section class="section contact-info">
     <div class="wrap text-col">
       <h1 class="h-title">Contact</h1>
       <p>Questions before you book?
-        Write to <strong>contact@omen.example</strong> and you’ll get a reply within 24 - 48 hours.</p>
-      <p>For bookings, please use the <a href="{{ url_for('booking') }}">Booking</a> page so I can track your request.</p>
+        Write to <strong>office@omenastrology.com</strong> and you’ll get a reply within 24 - 48 hours.</p>
+      <p>For bookings, please use the <a href="{{ url_for('readings') }}">Readings</a> page so we can track your request.</p>
     </div>
   </section>
 
@@ -58,5 +34,4 @@
     </div>
   </section>
 
-</body>
-</html>
+{% endblock %}

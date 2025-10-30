@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}OMEN ASTROLOGY{% endblock %}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+  {% block head_extras %}{% endblock %}
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="{{ url_for('home') }}">
+        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
+        <span class="brand-text">OMEN ASTROLOGY</span>
+      </a>
+      <nav class="nav">
+        <a href="{{ url_for('home') }}">HOME</a>
+        <a href="{{ url_for('about') }}">About</a>
+        <a href="{{ url_for('readings') }}">Readings</a>
+        {% if cart_count > 0 %}
+          <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a>
+        {% endif %}
+        <a href="{{ url_for('contact') }}">CONTACT</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- FLASH MESSAGES -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="flash-message flash-{{ category }}" 
+             style="padding: 10px; margin: 10px 0; border: 1px solid; 
+                    max-width: 1200px; margin-left: auto; margin-right: auto; 
+                    text-align: center;">
+          {{ message }}
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <!-- MAIN CONTENT -->
+  {% block content %}{% endblock %}
+
+  <!-- FOOTER -->
+  <div class="compliance-footer-strip" style="margin-top: 50px; padding: 20px 0; border-top: 1px solid #eee; text-align: center;">
+    <div class="wrap" style="max-width: 1200px; margin: 0 auto;">
+      <p style="font-size: 0.8em; color: #777;">
+        &copy; 2025 Omen Astrology. All Rights Reserved.<br/>
+        <span style="font-size: 0.95em; color: #a97cbd; display:block; margin:8px 0 0 0;">
+          Astrology services offered here are for personal guidance and insight. They are not medical, legal, or financial advice.<br>
+          Results are based on astrological analysis and personal interpretation.
+        </span>
+        <span style="display: block; margin-top: 5px;">
+            <a href="{{ url_for('privacy') }}" style="color: #444; margin: 0 10px; text-decoration: none;">Privacy Policy</a> | 
+            <a href="{{ url_for('faq') }}#refund-policy" style="color: #444; margin: 0 10px; text-decoration: none;">Refund Policy / FAQ</a> |
+            <a href="{{ url_for('contact') }}" style="color: #444; margin: 0 10px; text-decoration: none;">Support</a>
+        </span>
+      </p>
+    </div>
+  </div>
+
+  {% block scripts %}{% endblock %}
+
+</body>
+</html>
