@@ -1,4 +1,2 @@
-Flask>=3.0
-requests>=2.32.3
-sqlite3>=3.44.1
-
+Flask
+requests
