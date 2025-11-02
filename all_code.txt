@@ -11668,3 +11668,1894 @@ Start with a Written Reading.</p>
   </section>
 {% endblock %}
 
+----- app.py -----
+# app.py
+from flask import Flask, render_template, request, redirect, url_for, g, flash, jsonify, make_response
+from pathlib import Path
+from datetime import datetime
+import sqlite3
+import csv 
+import os
+import requests
+from uuid import uuid4
+import logging
+import hmac
+import hashlib
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    # dotenv is optional; ignore if missing
+    pass
+
+
+# --- CONFIGURATION ---
+BASE_DIR = Path(__file__).resolve().parent
+DATABASE = os.environ.get("OMEN_DB_PATH", str(BASE_DIR / 'data' / 'omen_orders.db'))
+# IMPORTANT: This secret key is for development only. Use a long, random key in production.
+app = Flask(
+    __name__,
+    static_folder="static",
+    template_folder="templates"
+)
+app.secret_key = b'your_long_and_secret_key_here' 
+
+# Configure logging
+app.logger.setLevel(logging.INFO)
+
+
+# --- DATABASE UTILITIES ---
+
+def get_db():
+    """Opens a new database connection if there is none yet for the current application context."""
+    db = getattr(g, '_database', None)
+    if db is None:
+        Path("data").mkdir(exist_ok=True)
+        db = g._database = sqlite3.connect(DATABASE)
+        db.row_factory = sqlite3.Row # Allows accessing columns by name
+    return db
+
+@app.teardown_appcontext
+def close_connection(exception):
+    """Closes the database again at the end of the request."""
+    db = getattr(g, '_database', None)
+    if db is not None:
+        db.close()
+
+def migrate_orders_table(db):
+    cols = {r[1] for r in db.execute("PRAGMA table_info(orders)")}
+    def add(col, sql):
+        if col not in cols:
+            db.execute(sql)
+    add("paypal_order_id", "ALTER TABLE orders ADD COLUMN paypal_order_id TEXT;")
+    add("status",          "ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'created';")
+    add("created_at",      "ALTER TABLE orders ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP;")
+    add("captured_at",     "ALTER TABLE orders ADD COLUMN captured_at TEXT;")
+    add("reading",         "ALTER TABLE orders ADD COLUMN reading TEXT;")
+    add("mode",            "ALTER TABLE orders ADD COLUMN mode TEXT;")
+    db.commit()
+
+def init_db():
+    """Initializes the database schema and migrates."""
+    with app.app_context():
+        db = get_db()
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS orders (
+                order_id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                name TEXT,
+                email TEXT,
+                total_price REAL,
+                payment_status TEXT,
+                completion_status TEXT,
+                birth_date TEXT,
+                birth_time TEXT,
+                birth_place TEXT,
+                secondary_birth_date TEXT,
+                secondary_birth_time TEXT,
+                secondary_birth_place TEXT
+            );
+            """
+        )
+        db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS order_items (
+                order_id TEXT NOT NULL,
+                item_id TEXT PRIMARY KEY,
+                reading_type TEXT,
+                reading_mode TEXT,
+                price REAL,
+                question TEXT,
+                FOREIGN KEY (order_id) REFERENCES orders(order_id)
+            );
+            """
+        )
+        migrate_orders_table(db)
+        db.commit()
+
+# --- INITIAL SETUP ---
+# Initialize the database when the app starts
+init_db()
+
+
+# --- READING DATA & PADDLE LINKS ---
+# Dictionary of reading information (names and prices)
+READINGS = {
+    "natal": {"name": "Natal Chart Analysis", "pdf_price": 90, "video_price": 120},
+    "orientation": {"name": "Orientation / Career Guidance", "pdf_price": 70, "video_price": 90},
+    "love": {"name": "Love & Relationship Guidance", "pdf_price": 70, "video_price": 90},
+    "focus": {"name": "Other Focus Area", "pdf_price": 60, "video_price": 80},
+    "annual": {"name": "Annual Horoscope (Solar Return)", "pdf_price": 85, "video_price": 110},
+    "horary": {"name": "Horary Chart Analysis", "pdf_price": 55, "video_price": 75},
+    "synastry": {"name": "Synastry", "pdf_price": 95, "video_price": 125},
+}
+
+# Remove PADDLE_LINKS definition and all usage
+# PADDLE_LINKS = {...}
+# in /readings route and all others
+
+
+# --- BASIC PAGES ---
+@app.route("/", endpoint="home")
+def home():
+    # cart_count is always 0 now, as the cart is removed
+    return render_template("index.html", cart_count=0)
+
+@app.route("/about")
+def about():
+    return render_template("about.html", cart_count=0)
+
+@app.route("/readings")
+def readings():
+    # Only pass readings data to the template
+    return render_template("readings.html", readings=READINGS, cart_count=0)
+
+@app.route("/order/details", methods=["GET", "POST"])
+def order_details():
+    reading_key = (request.values.get("reading") or "").strip()
+    mode = (request.values.get("mode") or "").strip()
+    reading = READINGS.get(reading_key)
+    if not reading or mode not in ("pdf", "video"):
+        flash("Invalid reading selection.", "danger")
+        return redirect(url_for("readings"))
+
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip()
+        birth_date = request.form.get("birth_date")
+        birth_time = request.form.get("birth_time")
+        birth_place = request.form.get("birth_place")
+        secondary_birth_date = request.form.get("secondary_birth_date")
+        secondary_birth_time = request.form.get("secondary_birth_time")
+        secondary_birth_place = request.form.get("secondary_birth_place")
+        question = request.form.get("question")
+
+        if not name or not email:
+            flash("Name and email are required.", "danger")
+            return redirect(url_for("order_details", reading=reading_key, mode=mode))
+
+        oid = str(uuid4())
+        try:
+            db = get_db()
+            db.execute(
+                """
+                INSERT INTO orders (
+                    order_id, timestamp, name, email, total_price, payment_status, completion_status,
+                    birth_date, birth_time, birth_place, secondary_birth_date, secondary_birth_time, secondary_birth_place,
+                    status, created_at, reading, mode
+                ) VALUES (
+                    ?, datetime('now'), ?, ?, NULL, 'unpaid', 'new',
+                    ?, ?, ?, ?, ?, ?, 'created', datetime('now'), ?, ?
+                )
+                """,
+                (
+                    oid, name, email,
+                    birth_date, birth_time, birth_place,
+                    secondary_birth_date, secondary_birth_time, secondary_birth_place,
+                    reading_key, mode,
+                ),
+            )
+            db.execute(
+                """
+                INSERT INTO order_items (order_id, item_id, reading_type, reading_mode, price, question)
+                VALUES (?, ?, ?, ?, NULL, ?)
+                """,
+                (oid, str(uuid4()), reading_key, mode, question),
+            )
+            db.commit()
+        except Exception:
+            app.logger.exception("Failed to create order with details")
+            flash("Could not create your order. Please try again.", "danger")
+            return redirect(url_for("readings"))
+
+        return redirect(url_for("checkout", reading=reading_key, mode=mode, order_id=oid))
+
+    return render_template(
+        "order_details.html",
+        reading_key=reading_key,
+        reading=reading,
+        mode=mode,
+        cart_count=0,
+    )
+
+@app.route("/contact")
+def contact():
+    return render_template("contact.html", cart_count=0)
+
+@app.route("/faq")
+def faq():
+    return render_template("faq.html", cart_count=0)
+
+@app.route("/privacy")
+def privacy():
+    return render_template("privacy.html", cart_count=0)
+
+# Updated thankyou for direct checkout flow
+@app.route("/thankyou")
+def thankyou():
+    status = request.args.get('status')
+    order_id = request.args.get('order_id')
+    video_session_needed = False
+    if order_id:
+        try:
+            db = get_db()
+            row = db.execute("SELECT mode FROM orders WHERE order_id=?", (order_id,)).fetchone()
+            if row and (row["mode"] or row[0]) == "video":
+                video_session_needed = True
+        except Exception:
+            app.logger.exception("Failed to determine video_session_needed")
+    return render_template(
+        "thankyou.html",
+        cart_count=0,
+        status=status,
+        order_id=order_id,
+        video_session_needed=video_session_needed,
+    )
+
+
+# --- DEPRECATED/REMOVED CART & MOCK PAYMENT ROUTES --- removed
+
+# --- PAYPAL ENV CONFIG ---
+PAYPAL_ENV = os.environ.get("PAYPAL_ENV", "sandbox")  # default to sandbox
+PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID", "your-client-id")
+PAYPAL_SECRET = os.environ.get("PAYPAL_SECRET", "your-secret")
+PAYPAL_WEBHOOK_ID = os.environ.get("PAYPAL_WEBHOOK_ID", "")
+PAYPAL_API_BASE = (
+    "https://api-m.sandbox.paypal.com"
+    if PAYPAL_ENV == "sandbox"
+    else "https://api-m.paypal.com"
+)
+
+# --- NOWPAYMENTS CONFIG --- (support legacy var names)
+NOWPAYMENTS_API_KEY = (
+    os.environ.get("NOWPAYMENTS_API_KEY")
+    or os.environ.get("NOWPAY_API_KEY")
+    or ""
+)
+NOWPAYMENTS_IPN_SECRET = (
+    os.environ.get("NOWPAYMENTS_IPN_SECRET")
+    or os.environ.get("NOWPAY_IPN_SECRET")
+    or ""
+)
+NOWPAYMENTS_PAY_CURRENCY = os.environ.get("NOWPAYMENTS_PAY_CURRENCY", "USDTTRC20")
+NOWPAYMENTS_API_BASE = "https://api.nowpayments.io/v1"
+
+# --- PAYPAL OAUTH UTILITY ---
+def get_paypal_access_token():
+    url = f"{PAYPAL_API_BASE}/v1/oauth2/token"
+    resp = requests.post(
+        url,
+        headers={"Accept": "application/json", "Accept-Language": "en_US"},
+        data={"grant_type": "client_credentials"},
+        auth=(PAYPAL_CLIENT_ID, PAYPAL_SECRET),
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+@app.route("/checkout", methods=["GET"])
+def checkout():
+    # Get reading and mode from query parameters
+    reading_key = request.args.get("reading")
+    mode = request.args.get("mode")
+    existing_order_id = request.args.get("order_id")
+    # fallback or error if invalid
+    reading = READINGS.get(reading_key)
+    if not reading or mode not in ("pdf", "video"):
+        flash("Invalid reading selection.", "danger")
+        return redirect(url_for("readings"))
+    # Require order details first
+    if not existing_order_id:
+        flash("Please enter your details to continue.", "info")
+        return redirect(url_for("order_details", reading=reading_key, mode=mode))
+
+    # Build item details
+    price = reading["pdf_price"] if mode == "pdf" else reading["video_price"]
+    item = {
+        "name": reading["name"],
+        "reading_mode": mode,
+        "price": price,
+        "id": str(uuid4()),
+        "reading_type": reading_key,
+        "question": None,  # Not collected here
+    }
+    order_id = existing_order_id
+    total_str = f"{price:.2f}"
+    # All checkout now per-item; no cart, no user info at this page
+    return render_template(
+        "checkout.html",
+        items=[item],
+        total=total_str,
+        currency="EUR",
+        paypal_client_id=PAYPAL_CLIENT_ID,
+        paypal_enabled=bool(PAYPAL_CLIENT_ID and PAYPAL_CLIENT_ID != "your-client-id"),
+        nowpayments_enabled=bool(NOWPAYMENTS_API_KEY),
+        order_id=order_id,
+        cart_count=0,
+    )
+
+# Create NOWPayments invoice and redirect user to payment page (POST only)
+@app.route("/crypto/checkout", methods=["POST"])
+def crypto_checkout():
+    reading_key = request.form.get("reading")
+    mode = request.form.get("mode")
+    order_id = request.form.get("order_id")
+    reading = READINGS.get(reading_key)
+    if not reading or mode not in ("pdf", "video") or not order_id:
+        flash("Invalid payment request.", "danger")
+        return redirect(url_for("readings"))
+
+    price = reading["pdf_price"] if mode == "pdf" else reading["video_price"]
+    price_float = float(price)
+
+    payload = {
+        "price_amount": price_float,
+        "price_currency": "EUR",
+        "pay_currency": NOWPAYMENTS_PAY_CURRENCY,
+        "order_id": order_id,
+        "order_description": f"{reading['name']} ({mode})",
+    }
+    headers = {
+        "x-api-key": NOWPAYMENTS_API_KEY,
+        "Content-Type": "application/json",
+    }
+
+    try:
+        resp = requests.post(
+            f"{NOWPAYMENTS_API_BASE}/invoice", json=payload, headers=headers, timeout=20
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        invoice_url = data.get("invoice_url")
+        if not invoice_url:
+            raise Exception("No invoice_url returned")
+
+        db = get_db()
+        db.execute(
+            """
+            INSERT OR IGNORE INTO orders (
+                order_id, timestamp, total_price, payment_status, completion_status,
+                status, created_at, reading, mode
+            ) VALUES (?, datetime('now'), ?, 'unpaid', 'new', 'created', datetime('now'), ?, ?)
+            """,
+            (order_id, price_float, reading_key, mode),
+        )
+        db.commit()
+
+        return redirect(invoice_url)
+    except Exception:
+        app.logger.exception("NOWPayments invoice error")
+        flash("Crypto payment initialization failed. Try again.", "danger")
+        return redirect(url_for("readings"))
+# Deprecated payment routes removed
+
+# --- PAYPAL API ROUTES ---
+@app.route("/api/paypal/orders", methods=["POST"])
+def api_paypal_orders():
+    order_id = request.args.get("order_id")
+    reading_key = request.args.get("reading")
+    mode = request.args.get("mode")
+    reading = READINGS.get(reading_key)
+    if not order_id or not reading or mode not in ("pdf", "video"):
+        return jsonify({"error": "Invalid order parameters."}), 400
+    price = reading["pdf_price"] if mode == "pdf" else reading["video_price"]
+    body = {
+        "intent": "CAPTURE",
+        "purchase_units": [{
+            "amount": {"currency_code": "EUR", "value": f"{price:.2f}"},
+            "custom_id": order_id,
+        }],
+        "application_context": {
+            "user_action": "PAY_NOW",
+            "shipping_preference": "NO_SHIPPING"
+        }
+    }
+    try:
+        headers = {
+            "Authorization": f"Bearer {get_paypal_access_token()}",
+            "Content-Type": "application/json",
+        }
+        r = requests.post(
+            f"{PAYPAL_API_BASE}/v2/checkout/orders", json=body, headers=headers, timeout=20
+        )
+        r.raise_for_status()
+        data = r.json()
+    except requests.RequestException:
+        app.logger.exception("PayPal create order failed")
+        return jsonify({"error": "paypal_create_failed"}), 502
+
+    # Persist a 'created' order note (do not fail the PayPal call on DB error)
+    internal_id = request.args.get("order_id")
+    reading = request.args.get("reading")
+    mode = request.args.get("mode")
+    try:
+        db = get_db()
+        db.execute(
+            """
+        INSERT OR IGNORE INTO orders (
+            order_id, timestamp, name, email, total_price, payment_status, completion_status,
+            birth_date, birth_time, birth_place, secondary_birth_date, secondary_birth_time, secondary_birth_place,
+            paypal_order_id, status, created_at, reading, mode
+        ) VALUES (?, datetime('now'), NULL, NULL, NULL, 'unpaid', 'new',
+                  NULL, NULL, NULL, NULL, NULL, NULL,
+                  ?, 'created', datetime('now'), ?, ?)
+        """,
+            (internal_id, data.get("id"), reading, mode),
+        )
+        db.commit()
+    except Exception:
+        app.logger.exception("create-order DB note failed")
+
+    return jsonify(data), 201
+
+@app.route("/api/paypal/orders/<paypal_order_id>/capture", methods=["POST"])
+def api_paypal_capture(paypal_order_id):
+    try:
+        token = get_paypal_access_token()
+        r = requests.post(
+            f"{PAYPAL_API_BASE}/v2/checkout/orders/{paypal_order_id}/capture",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except requests.RequestException:
+        app.logger.exception("PayPal capture failed")
+        return {"error": "paypal_capture_failed"}, 502
+
+    # require final status
+    if data.get("status") != "COMPLETED":
+        return {"error": "not_completed", "raw": data}, 400
+
+    internal_id = request.args.get("order_id")
+    reading = request.args.get("reading")
+    mode = request.args.get("mode")
+
+    # pull the paid amount from capture payload
+    try:
+        cap = data["purchase_units"][0]["payments"]["captures"][0]
+        amount_value = float(cap["amount"]["value"])
+        amount_ccy = cap["amount"]["currency_code"]
+    except Exception as e:
+        app.logger.exception("Failed to parse PayPal capture amount")
+        return {"error": f"parse_amount_failed: {e}", "raw": data}, 500
+
+    # attempt to read payer info
+    payer_email = None
+    payer_name = None
+    try:
+        payer = data.get("payer") or {}
+        payer_email = payer.get("email_address")
+        name = payer.get("name") or {}
+        if name:
+            gn = name.get("given_name") or ""
+            sn = name.get("surname") or ""
+            payer_name = (gn + " " + sn).strip() or None
+        if not payer_name:
+            ship = (data.get("purchase_units") or [{}])[0].get("shipping") or {}
+            full_name = (ship.get("name") or {}).get("full_name")
+            payer_name = full_name or payer_name
+    except Exception:
+        app.logger.info("No payer name/email in capture payload")
+
+    db = get_db()
+    try:
+        # 1) upsert the order row as paid
+        db.execute(
+            """
+            INSERT OR IGNORE INTO orders (
+                order_id, timestamp, name, email, total_price, payment_status, completion_status,
+                birth_date, birth_time, birth_place, secondary_birth_date, secondary_birth_time, secondary_birth_place,
+                paypal_order_id, status, created_at, captured_at, reading, mode
+            ) VALUES (?, datetime('now'), NULL, NULL, ?, 'paid', 'new',
+                      NULL, NULL, NULL, NULL, NULL, NULL,
+                      ?, 'captured', datetime('now'), datetime('now'), ?, ?)
+            """,
+            (internal_id, amount_value, paypal_order_id, reading, mode),
+        )
+
+        # 2) if it existed already, make sure totals/status are updated
+        db.execute(
+            """
+            UPDATE orders
+               SET total_price = COALESCE(?, total_price),
+                   payment_status = 'paid',
+                   status = 'captured',
+                   captured_at = datetime('now'),
+                   paypal_order_id = COALESCE(?, paypal_order_id),
+                   reading = COALESCE(?, reading),
+                   mode = COALESCE(?, mode),
+                   email = COALESCE(?, email),
+                   name = COALESCE(?, name)
+             WHERE order_id = ?
+            """,
+            (amount_value, paypal_order_id, reading, mode, payer_email, payer_name, internal_id),
+        )
+
+        # 3) insert a single line item that mirrors the reading
+        db.execute(
+            """
+            INSERT OR IGNORE INTO order_items (order_id, item_id, reading_type, reading_mode, price, question)
+            VALUES (?, ?, ?, ?, ?, NULL)
+            """,
+            (internal_id, str(uuid4()), reading, mode, amount_value),
+        )
+
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        app.logger.exception("DB error updating order after capture")
+        return {"error": f"db_error: {e}"}, 500
+
+    return {"redirect": url_for("thankyou", status="paid", order_id=internal_id)}, 200
+
+@app.route("/webhooks/paypal", methods=["POST"])
+def paypal_webhook():
+    if not PAYPAL_WEBHOOK_ID:
+        app.logger.error("PAYPAL_WEBHOOK_ID not set; cannot verify webhook")
+        return make_response("", 400)
+    headers = request.headers
+    required_headers = [
+        "PAYPAL-TRANSMISSION-ID",
+        "PAYPAL-TRANSMISSION-TIME",
+        "PAYPAL-TRANSMISSION-SIG",
+        "PAYPAL-AUTH-ALGO",
+        "PAYPAL-CERT-URL"
+    ]
+    actual_headers = {h: headers.get(h) for h in required_headers}
+    webhook_id = PAYPAL_WEBHOOK_ID
+    verify_body = {
+        "transmission_id": actual_headers["PAYPAL-TRANSMISSION-ID"],
+        "transmission_time": actual_headers["PAYPAL-TRANSMISSION-TIME"],
+        "cert_url": actual_headers["PAYPAL-CERT-URL"],
+        "auth_algo": actual_headers["PAYPAL-AUTH-ALGO"],
+        "transmission_sig": actual_headers["PAYPAL-TRANSMISSION-SIG"],
+        "webhook_id": webhook_id,
+        "webhook_event": request.get_json(force=True)
+    }
+    resp = requests.post(
+        f"{PAYPAL_API_BASE}/v1/notifications/verify-webhook-signature",
+        json=verify_body,
+        headers={
+            "Authorization": f"Bearer {get_paypal_access_token()}",
+            "Content-Type": "application/json",
+        },
+        timeout=20,
+    )
+    try:
+        resp.raise_for_status()
+        result = resp.json()
+    except Exception:
+        app.logger.exception("PayPal webhook verify failed")
+        return make_response("", 400)
+    event = verify_body["webhook_event"]
+    # Only update paid if verified and correct event
+    if (
+        result.get("verification_status") == "SUCCESS"
+        and event.get("event_type") == "PAYMENT.CAPTURE.COMPLETED"
+    ):
+        custom_id = event.get("resource", {}).get("custom_id")
+        if custom_id:
+            with app.app_context():
+                db = get_db()
+                db.execute("UPDATE orders SET payment_status = 'paid' WHERE order_id = ?", (custom_id,))
+                db.commit()
+    return make_response("", 200)
+
+@app.route("/webhooks/crypto", methods=["POST"])
+def crypto_webhook():
+    signature = request.headers.get("x-nowpayments-sig", "")
+    raw_body = request.get_data()
+    try:
+        calc_sig = hmac.new(
+            NOWPAYMENTS_IPN_SECRET.encode("utf-8"), raw_body, hashlib.sha512
+        ).hexdigest()
+    except Exception:
+        app.logger.exception("NOWPayments signature generation failed")
+        return "invalid signature", 403
+    if not hmac.compare_digest(calc_sig, signature):
+        app.logger.warning("NOWPayments signature mismatch")
+        return "invalid signature", 403
+
+    data = request.get_json(force=True)
+    payment_status = data.get("payment_status")
+    order_id = data.get("order_id")
+    pay_amount = data.get("pay_amount")
+
+    if not order_id:
+        return "no order id", 200
+
+    if payment_status in ("finished", "confirmed", "paid"):
+        try:
+            db = get_db()
+            db.execute(
+                """
+                UPDATE orders
+                SET payment_status='paid',
+                    status='captured',
+                    total_price=COALESCE(?, total_price),
+                    captured_at=datetime('now')
+                WHERE order_id=?
+                """,
+                (pay_amount, order_id),
+            )
+            db.execute(
+                """
+                INSERT OR IGNORE INTO order_items (order_id, item_id, reading_type, reading_mode, price, question)
+                SELECT order_id, ?, reading, mode, total_price, NULL FROM orders WHERE order_id=?
+                """,
+                (str(uuid4()), order_id),
+            )
+            db.commit()
+        except Exception:
+            app.logger.exception("NOWPayments DB update error")
+    return "OK", 200
+
+# --- CONTACT FORM ---
+
+@app.route("/submit_contact", methods=["POST"])
+def submit_contact():
+    name = request.form.get("name", "").strip()
+    email = request.form.get("email", "").strip()
+    message = request.form.get("message", "").strip()
+
+    # Make sure data/ exists
+    Path(BASE_DIR / "data").mkdir(exist_ok=True)
+
+    # Append a CSV row safely (handles quotes/commas)
+    with open(BASE_DIR / "data" / "contact_messages.csv", "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([datetime.utcnow().isoformat(), name, email, message])
+
+    flash("Thank you — your message was sent.", "success")
+    return redirect(url_for("thankyou"))
+
+# --- PADDLE WEBHOOK ROUTE (Future Implementation) ---
+# NOTE: This route is for future implementation. The logic will be complex.
+# @app.route("/paddle-webhook", methods=["POST"])
+# def paddle_webhook():
+#     # 1. Verify Signature
+#     # 2. Parse JSON body (get custom data: reading_slug, reading_mode)
+#     # 3. Log order to SQLite (db.execute INSERT)
+#     # 4. Send fulfillment email
+#     # 5. Return 200 OK
+#     pass 
+
+
+if __name__ == "__main__":
+    app.logger.info(">>> Initializing database...")
+    init_db()
+    app.logger.info(">>> Running app...")
+    app.run(debug=os.environ.get("FLASK_DEBUG", "0") == "1")
+
+
+----- static/css/styles.css -----
+/* =========================================
+   [ROOT VARIABLES & BASE SETTINGS]
+   ========================================= */
+:root{
+  --ink:#1a1a1a;
+  --ink-soft:#444;
+  --paper:#fff;
+  --accent:#2b0f35;
+  --accent-2:#5e4776;
+  --maxw:1200px;
+}
+*{ box-sizing:border-box; }
+html,body{ height:100%; }
+html{ scroll-behavior:smooth; }
+body{
+  margin:0;
+  color:var(--ink);
+  background:var(--paper);
+  font:16px/1.6 "Georgia","Times New Roman",serif;
+}
+/* General content wrapper: full width, centered */
+.wrap{ max-width:var(--maxw); margin:0 auto; padding:0 24px; }
+
+/* FIX: New class for left-aligned, max-width content (replacing centered .text-col) */
+.intro-content { max-width: 720px; } 
+
+/* Typography Helpers */
+.h-title,.title{ font-family:"Cormorant Garamond", Georgia, "Times New Roman", serif; font-weight:600; }
+.h-title{ font-size:clamp(36px,4.6vw,64px); line-height:1.05; margin:0 0 12px; }
+.h-lede{ max-width:44ch; }
+
+
+/* =========================================
+   [HEADER / NAVIGATION SECTION]
+   ========================================= */
+.topbar{
+  background:#fff;
+  border-bottom:1px solid #e8e6ef;
+  position:sticky; top:0; z-index:10;
+}
+.topbar .wrap{
+  display:flex; align-items:center; justify-content:space-between;
+  height:64px;
+}
+.brand{ display:inline-flex; align-items:center; gap:14px; text-decoration:none; color:inherit; }
+.logo{ height:38px; width:auto; display:block; }
+.brand-text{
+  letter-spacing:.06em; font-weight:600; font-size:18px;
+  font-family:"Cormorant Garamond", Georgia, "Times New Roman", serif;
+}
+.nav a{
+  text-decoration:none; color:var(--ink-soft); margin-left:26px;
+  font-size:14px; letter-spacing:.04em;
+}
+.nav a:first-child{ margin-left:0; }
+.nav a:hover{ color:var(--ink); }
+
+
+/* =========================================
+   [HERO SECTION - BANNER]
+   ========================================= */
+.hero{
+  position:relative;
+  height:55vh; min-height:480px;
+  isolation:isolate; scroll-snap-align:start;
+}
+/* FIX: Corrected the relative path for the image */
+.hero-media{
+  position:absolute; inset:0;
+  background-image:url("../images/front.jpg"); 
+  background-size:cover; background-position:center top;
+  filter:saturate(90%);
+  z-index:-2;
+}
+.hero-wash{
+  position:absolute; inset:0; z-index:-1; opacity:.92;
+  background:linear-gradient(
+    90deg,
+    color-mix(in srgb,var(--accent-2) 62%,transparent) 0%,
+    color-mix(in srgb,var(--accent-2) 62%,transparent) 46%,
+    color-mix(in srgb,var(--accent-2) 40%,transparent) 62%,
+    color-mix(in srgb,var(--accent-2) 18%,transparent) 78%,
+    transparent 100%
+  );
+}
+.hero-grid{
+  display:grid;
+  grid-template-columns:1fr 2fr;
+  align-items:center; height:100%;
+}
+.hero-left{ display:block; }
+.hero-right{ min-height:240px; }
+.hero-content{
+  height:100%; display:grid; align-content:center;
+  padding:24px 0; max-width:720px;
+}
+.title{
+  margin:0 0 8px 0; font-size:clamp(44px,6vw,84px); line-height:1.05; letter-spacing:.02em;
+  font-family:"Cormorant Garamond", Georgia, "Times New Roman", serif; font-weight:600;
+}
+.lede{
+  margin:0 0 28px 0; font-size:clamp(16px,2.1vw,22px);
+  color:#f5f3f8; text-shadow:0 1px 0 rgba(0,0,0,.25);
+}
+
+
+/* =========================================
+   [COMPONENTS - BUTTONS]
+   ========================================= */
+.cta-row{ display:flex; flex-wrap:wrap; gap:16px; }
+.btn{
+  display:inline-block; padding:14px 22px; border-radius:6px;
+  text-decoration:none; font-size:16px; line-height:1;
+  letter-spacing:.02em; transition:transform .08s ease, background-color .2s ease,
+  color .2s ease, box-shadow .2s ease, border-color .2s ease;
+  user-select:none; border:1px solid transparent;
+}
+.btn-primary{ background:var(--accent); color:#fff; box-shadow:0 6px 16px rgba(0,0,0,.18); }
+.btn-primary:hover{ transform:translateY(-1px); background:#3a1847; }
+.btn-secondary{ background:var(--accent-2); color:#fff; box-shadow:0 6px 16px rgba(0,0,0,.12); }
+.btn-secondary:hover{ transform:translateY(-1px); background:#4d3763; }
+.btn-ghost{
+  background:rgba(255,255,255,.08); color:#fff;
+  border-color:rgba(255,255,255,.3); backdrop-filter:blur(1px);
+}
+.btn-ghost:hover{
+  background:rgba(255,255,255,.16); border-color:rgba(255,255,255,.5);
+  transform:translateY(-1px);
+}
+.btn.disabled, button.disabled[disabled] {
+    opacity: 0.55 !important; cursor: not-allowed !important; transform: none !important; box-shadow: none !important;
+}
+/* Specific ghost button overrides for light backgrounds */
+.cart-summary .btn-ghost,
+.section.faq-preview .btn-ghost,
+.card.pricing .btn-ghost {
+    background: #fff; color: var(--accent); border-color: rgba(43, 15, 53, 0.2); 
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+.cart-summary .btn-ghost:hover, .section.faq-preview .btn-ghost:hover {
+    background: rgba(43, 15, 53, 0.06); transform: translateY(-1px);
+}
+.btn-row.dual{ display:flex; justify-content:flex-start; gap:0.75rem; margin-top:1rem; flex-wrap:wrap; }
+.btn-row.dual .btn{ flex:1 1 48%; text-align:center; }
+.card.pricing .btn-ghost:hover{
+  background: rgba(58,24,71,.06); border-color: rgba(58,24,71,.45); transform: translateY(-1px);
+}
+
+/* NOWPayments button spacing to match PayPal */
+.np-crypto-button img { display:block; margin:16px 0; }
+
+
+/* =========================================
+   [COMPONENTS - CARDS GRID]
+   ========================================= */
+.cards-grid{ display:grid; grid-template-columns:1fr 1fr; gap:24px; }
+.cards-grid.three{ grid-template-columns:repeat(3,1fr); }
+.card{
+  background:#fff; border:1px solid #e8e6ef; border-radius:10px;
+  padding:22px; text-decoration:none; color:inherit;
+  transition:transform .08s ease, box-shadow .2s ease, border-color .2s ease;
+}
+.card:hover{
+  transform:translateY(-2px); box-shadow:0 10px 24px rgba(0,0,0,.08); border-color:#d8d5e3;
+}
+.card-title{ margin:0 0 8px; font-size:18px; letter-spacing:.04em; }
+.card-text{ margin:0 0 10px; color:#333; font-size:15px; }
+.card-link{ color:#5b3d84; font-weight:600; font-size:14px; }
+
+
+/* =========================================
+   [COMPONENTS - STEPS FLOW]
+   ========================================= */
+.steps{
+  display:grid; grid-template-columns:repeat(3,1fr); gap:24px; position:relative; padding-bottom:20px; 
+  /* Centering the steps container itself */
+  max-width: 900px; margin: 40px auto 0;
+}
+.steps::before {
+    content: ''; position: absolute; top: 30px; left: 10%; right: 10%;
+    height: 2px; background: #e8e6ef; z-index: 1; pointer-events: none;
+}
+.step{
+  background:var(--paper); border:1px solid #e8e6ef; border-radius:10px;
+  padding:22px; position:relative; z-index:2;
+}
+.step-num{
+  position:absolute; top:-12px; left:-12px;
+  width:36px; height:36px; border-radius:8px; display:grid; place-items:center;
+  background:#5b3d84; color:#fff; font-weight:700; box-shadow:0 4px 10px rgba(0,0,0,.15);
+}
+.step-title{ margin:10px 0 6px; font-size:18px; }
+.step-text{ margin:0; font-size:15px; color:#333; }
+
+
+/* =========================================
+   [HOME - SECTIONS]
+   ========================================= */
+.section{ padding:56px 0; }
+.section.services{ background:#d1c6db; }
+.section.services .h-lede { max-width: 100%; }
+
+.section.home-readings{ background:#ffffff; padding-top:72px; padding-bottom:72px; }
+.readings-split {
+    display: grid; grid-template-columns: 1.2fr 1fr; gap: 40px; align-items: center; margin-top: 40px;
+}
+.readings-visual {
+    background: #fff; border: 1px solid #e8e6ef; border-radius: 12px;
+    padding: 30px; box-shadow: 0 4px 10px rgba(0,0,0,.05);
+}
+.chart-placeholder {
+    width: 100%; height: 300px;
+    background: url('../images/chart_example.png') no-repeat center center; 
+    background-size: contain; border: 1px solid #d8d5e3; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+}
+.chart-placeholder img { max-width: 100%; max-height: 100%; display: block; }
+
+.section.about-preview{ background:#f6f3f9; } 
+.section.testimonials{ background:#ffffff; } 
+
+/* Testimonials/Commitment to Quality Layout */
+.testimonials-list{ display:grid; grid-template-columns:repeat(3,1fr); gap:24px; }
+.testimonial{ background:#fff; border:1px solid #e8e6ef; border-radius:10px; padding:22px; margin:0; }
+.testimonial blockquote{ margin:0 0 10px 0; font-size:16px; color:#2b2b3b; font-style:italic; }
+.testimonial figcaption{ color:#666; font-size:14px; }
+
+
+/* FAQ Preview Layout - Aligned Left like the rest of the content */
+.section.faq-preview{ background:#f6f3f9; }
+
+.faq-list {
+    max-width: 100%; text-align: left; margin: 20px 0;
+}
+.faq-list details{
+  background:#fff; border:1px solid #e8e6ef; border-radius:10px;
+  padding:14px 16px; margin:0 0 12px 0;
+}
+.faq-list summary{ cursor:pointer; font-weight:600; outline:none; }
+.faq-list details[open]{ border-color:#d8d5e3; box-shadow:0 6px 16px rgba(0,0,0,.06); }
+.faq-list p{ margin:10px 0 0; color:#333; }
+
+
+/* CTA Strip Layout */
+.section.cta-strip{
+  background:linear-gradient(90deg,#5e4776,#2b0f35); color:#fff; padding:28px 0;
+}
+.cta-strip-inner{
+  display:flex; align-items:center; justify-content:space-between; gap:16px;
+}
+.cta-strip-text{ margin:0; font-size:18px; }
+
+
+/* =========================================
+   [PAGES - GENERAL]
+   ========================================= */
+.section.about-intro{ background:#ffffff; }
+.section.about-values{ background:#f6f3f9; }
+.section.readings-intro{ background:#ffffff; }
+.section.readings-grid{ background:#ffffff; padding:24px 0 72px; }
+.section.booking-options{ background:#ffffff; padding:56px 0 24px; }
+.section.booking-form{ background:#f6f3f9; padding:24px 0 72px; }
+.section.contact-info{ background:#ffffff; padding:56px 0 24px; }
+.section.contact-form{ background:#f6f3f9; padding:24px 0 72px; }
+.section.faq{ background:#ffffff; }
+.section.legal{ background:#ffffff; }
+.card.pricing .price{ font-size:22px; font-weight:700; margin:8px 0 14px; }
+.mini-list{ margin:10px 0 8px; padding-left:18px; color:#333; font-size:14px; }
+.mini-list li{ margin:4px 0; }
+
+
+/* =========================================
+   [PAGES - FORMS]
+   ========================================= */
+.form-wrap{ max-width:720px; }
+.form{
+  background:#fff; border:1px solid #e8e6ef; border-radius:10px; padding:22px;
+}
+.form-row{ margin-bottom:16px; }
+.form-row.grid2{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.form label{ display:block; font-weight:600; margin-bottom:6px; }
+.form input,.form select,.form textarea{
+  width:100%; padding:12px 12px; border:1px solid #d8d5e3; border-radius:8px; font:inherit;
+}
+.form input:focus,.form select:focus,.form textarea:focus{
+  outline:none; border-color:#5b3d84; box-shadow:0 0 0 3px rgba(91,61,132,.15);
+}
+.booking-buttons{ display:flex; gap:12px; margin-top:10px; flex-wrap:wrap; }
+
+
+/* =========================================
+   [CART SPECIFIC STYLING]
+   ========================================= */
+.cart-details .wrap { max-width: 1000px; }
+.cart-layout {
+    display: grid; grid-template-columns: 2fr 1fr; gap: 40px; align-items: start;
+}
+.cart-items-list { border-right: 1px solid #eee; padding-right: 40px; }
+.cart-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 15px 0; border-bottom: 1px solid #f0f0f0;
+}
+.cart-item:last-child { border-bottom: none; }
+.item-info strong { font-size: 1.1em; font-weight: 600; }
+.item-info p { margin: 5px 0 0 0; font-size: 0.9em; color: #555; }
+.item-price { text-align: right; font-weight: bold; font-size: 1.1em; }
+.remove-link { display: block; font-size: 0.8em; color: #a00; text-decoration: none; margin-top: 5px; }
+.remove-link:hover { text-decoration: underline; }
+.cart-summary {
+    background-color: #f9f9f9; padding: 25px; border: 1px solid #eee; border-radius: 5px;
+}
+.cart-summary h2 { margin-top: 0; margin-bottom: 20px; font-size: 1.5em; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+.summary-row { display: flex; justify-content: space-between; font-size: 1.1em; margin-bottom: 10px; }
+.summary-row.total {
+    font-size: 1.3em; font-weight: 700; margin-top: 20px; padding-top: 10px; border-top: 2px solid var(--accent);
+}
+
+
+/* =========================================
+   [NOTIFICATION POPUP STYLING]
+   ========================================= */
+.notification-popup {
+    position: fixed; top: 20px; right: 20px; background-color: var(--accent); color: white;
+    padding: 15px 20px; border-radius: 5px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    display: flex; align-items: center; gap: 15px; z-index: 1000; opacity: 0;
+    transform: translateY(-50px); transition: opacity 0.3s ease, transform 0.3s ease; pointer-events: none;
+}
+.notification-popup.show { opacity: 1; transform: translateY(0); pointer-events: all; }
+.popup-icon { font-size: 1.5em; color: #66ff66; line-height: 1; }
+.notification-popup a.btn-sm.btn-ghost {
+    background: rgba(255, 255, 255, 0.15); color: white; padding: 5px 10px; border-radius: 3px;
+    text-decoration: none; font-weight: 600; font-size: 0.9em; border: 1px solid transparent;
+}
+.notification-popup a.btn-sm.btn-ghost:hover {
+    background: rgba(255, 255, 255, 0.3); border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+
+/* =========================================
+   [RESPONSIVE & ACCESSIBILITY]
+   ========================================= */
+@media (min-width:900px){
+  body{ scroll-snap-type:y mandatory; }
+}
+@media (prefers-reduced-motion:reduce){
+  .svc{ animation:none !important; opacity:1 !important; }
+}
+@supports not (animation-timeline:view()){
+  .svc{ opacity:1; }
+}
+@media (max-width:900px){
+  .nav{ display:none; }
+  .brand-text{ font-size:16px; }
+  .hero-grid{ grid-template-columns:1fr; }
+  .hero-right{ display:none; }
+  .hero-content{ max-width:92%; }
+  .services-grid{ grid-template-columns:1fr; gap:32px; }
+  .cards-grid, .cards-grid.three{ grid-template-columns:1fr; }
+  .steps{ grid-template-columns:1fr; margin-top:20px auto 0; }
+  .steps::before { content: none; }
+  .testimonials-list{ grid-template-columns:1fr; }
+  .cta-strip-inner{ flex-direction:column; align-items:flex-start; }
+  .readings-split { grid-template-columns: 1fr; gap: 20px; }
+  .readings-visual { order: -1; padding: 20px; }
+  .cart-layout { grid-template-columns: 1fr; gap: 20px; }
+  .cart-items-list { border-right: none; padding-right: 0; border-bottom: 1px solid #eee; padding-bottom: 20px; }
+  .form-row.grid2{ grid-template-columns:1fr; }
+}
+@media (max-width:420px){
+  .h-title{ font-size:clamp(28px,8vw,40px); }
+  .btn{ padding:12px 18px; font-size:15px; }
+}
+@supports (padding:max(0px)){
+  .topbar .wrap{
+    padding-left:max(24px, env(safe-area-inset-left));
+    padding-right:max(24px, env(safe-area-inset-right));
+  }
+}
+/* =========================================
+   [MISC COMPONENTS & UTILITIES]
+   ========================================= */
+:target { scroll-margin-top: 90px; }
+.section { scroll-margin-top: 90px; }
+.text-col { max-width: 720px; margin: 0 auto; } /* Keeping text-col in place for other pages */
+
+----- static/js/cal_bootstrap.js -----
+// Define stub BEFORE loading Cal's embed.js
+window.Cal = window.Cal || function () {
+  (window.Cal.q = window.Cal.q || []).push(arguments);
+};
+
+// Load Cal script dynamically, then init
+(function () {
+  var s = document.createElement('script');
+  s.src = 'https://app.cal.com/embed/embed.js';
+  s.onload = function () {
+    try {
+      window.Cal('ui', { theme: 'light' });
+      console.log('Cal ready.');
+    } catch (e) {
+      console.error('Cal init error:', e);
+    }
+  };
+  s.onerror = function () {
+    console.error('Failed to load Cal embed.js');
+  };
+  document.head.appendChild(s);
+})();
+
+
+----- templates/privacy.html -----
+{% extends "base.html" %}
+
+{% block title %}Privacy & Terms - Omen Astrology{% endblock %}
+
+{% block content %}
+  <!-- ========================================= -->
+  <!-- [LEGAL - PRIVACY & TERMS SECTION] -->
+  <!-- ========================================= -->
+  <section class="section legal">
+    <div class="wrap text-col">
+      <h1 class="h-title">Privacy & Terms</h1>
+
+      <h3>Data we collect</h3>
+      <p>Name, email, and birth details. These are used only to deliver your reading.</p>
+
+      <h3>Storage</h3>
+      <p>Data is stored securely and kept only as long as needed for your reading and follow-up.</p>
+
+      <h3>Your rights</h3>
+      <p>You can request deletion or a copy of your data at any time via email.</p>
+
+      <h3>Refunds</h3>
+      <p>If we have not started the work, refunds are possible. After delivery, refunds are not offered.</p>
+      <p>If there is ever a concern or misunderstanding, please contact me first so we can resolve it together.</p>
+      <h3>Terms of Service</h3>
+      <ul style="font-size: 1em; color:#444; margin-top:8px;">
+        <li>Readings are digital services delivered via email or live call</li>
+        <li>Work begins after payment &amp; form submission</li>
+        <li>Refunds only if work has not started</li>
+        <li>Client agrees that this is a guidance service, not a guaranteed outcome service</li>
+        <li>By purchasing, you consent to this policy</li>
+      </ul>
+
+      <h3>Copyright</h3>
+      <p>Readings are for personal use. Please do not republish without permission.</p>
+    </div>
+  </section>
+
+{% endblock %}
+
+----- templates/base.html -----
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}OMEN ASTROLOGY{% endblock %}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+  {% block head_extras %}{% endblock %}
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header class="topbar">
+    <div class="wrap">
+      <a class="brand" href="{{ url_for('home') }}">
+        <img class="logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="Omen logo" />
+        <span class="brand-text">OMEN ASTROLOGY</span>
+      </a>
+      <nav class="nav">
+        <a href="{{ url_for('home') }}">HOME</a>
+        <a href="{{ url_for('about') }}">About</a>
+        <a href="{{ url_for('readings') }}">Readings</a>
+        {% if cart_count > 0 %}
+          <a href="{{ url_for('cart') }}" class="btn-cart">CART ({{ cart_count }})</a>
+        {% endif %}
+        <a href="{{ url_for('contact') }}">CONTACT</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- FLASH MESSAGES -->
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="flash-message flash-{{ category }}" 
+             style="padding: 10px; margin: 10px 0; border: 1px solid; 
+                    max-width: 1200px; margin-left: auto; margin-right: auto; 
+                    text-align: center;">
+          {{ message }}
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <!-- MAIN CONTENT -->
+  {% block content %}{% endblock %}
+
+  <!-- FOOTER -->
+  <div class="compliance-footer-strip" style="margin-top: 50px; padding: 20px 0; border-top: 1px solid #eee; text-align: center;">
+    <div class="wrap" style="max-width: 1200px; margin: 0 auto;">
+      <p style="font-size: 0.8em; color: #777;">
+        &copy; 2025 Omen Astrology. All Rights Reserved.<br/>
+        <span style="font-size: 0.95em; color: #a97cbd; display:block; margin:8px 0 0 0;">
+          Astrology services offered here are for personal guidance and insight. They are not medical, legal, or financial advice.<br>
+          Results are based on astrological analysis and personal interpretation.
+        </span>
+        <span style="display: block; margin-top: 5px;">
+            <a href="{{ url_for('privacy') }}" style="color: #444; margin: 0 10px; text-decoration: none;">Privacy Policy</a> | 
+            <a href="{{ url_for('faq') }}#refund-policy" style="color: #444; margin: 0 10px; text-decoration: none;">Refund Policy / FAQ</a> |
+            <a href="{{ url_for('contact') }}" style="color: #444; margin: 0 10px; text-decoration: none;">Support</a>
+        </span>
+      </p>
+    </div>
+  </div>
+
+  {% block scripts %}{% endblock %}
+
+</body>
+</html>
+
+
+----- templates/about.html -----
+{% extends "base.html" %}
+
+{% block title %}About Omen - Omen Astrology{% endblock %}
+
+{% block content %}
+
+  <!-- ========================================= -->
+  <!-- [ABOUT - INTRO SECTION] -->
+  <!-- ========================================= -->
+  <section class="section about-intro">
+    <div class="wrap text-col">
+      <h1 class="h-title">About Omen</h1>
+      <p>Omen is built on a simple belief: Astrology is a language of patterns. It does not force events. It helps you name what is active in your life, so you can act with more clarity.</p>
+      <p>I use Traditional Astrology. I focus on clear judgment, activation of Houses, and how different parts of life connect. Each reading is personal and written in plain English.</p>
+    </div>
+  </section>
+
+  <!-- ========================================= -->
+  <!-- [ABOUT - VALUES SECTION] -->
+  <!-- ========================================= -->
+  <section class="section about-values">
+    <div class="wrap cards-grid three">
+      <div class="card">
+        <h3 class="card-title">Clarity</h3>
+        <p class="card-text">Direct language and practical guidance. No fluff.</p>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Privacy</h3>
+        <p class="card-text">Your data and chart stay confidential.</p>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Integrity</h3>
+        <p class="card-text">No empty promises. The goal is your understanding and action.</p>
+      </div>
+    </div>
+  </section>
+{% endblock %}
+
+----- templates/contact.html -----
+{% extends "base.html" %}
+
+{% block title %}Contact - Omen Astrology{% endblock %}
+
+{% block content %}
+  <section class="section contact-info">
+    <div class="wrap text-col">
+      <h1 class="h-title">Contact</h1>
+      <p>Questions before you book?
+        Write to <strong>office@omenastrology.com</strong> and you’ll get a reply within 24 - 48 hours.</p>
+      <p>For bookings, please use the <a href="{{ url_for('readings') }}">Readings</a> page so we can track your request.</p>
+    </div>
+  </section>
+
+  <section class="section contact-form">
+    <div class="wrap form-wrap">
+      
+      <form class="form" action="{{ url_for('submit_contact') }}" method="post">
+        <div class="form-row">
+          <label>Name</label>
+          <input type="text" name="name" required>
+        </div>
+        <div class="form-row">
+          <label>Email</label>
+          <input type="email" name="email" required>
+        </div>
+        <div class="form-row">
+          <label>Message</label>
+          <textarea rows="6" name="message" required></textarea>
+        </div>
+        <button class="btn btn-primary" type="submit">Send</button>
+      </form>
+      
+    </div>
+  </section>
+
+{% endblock %}
+
+----- templates/faq.html -----
+{% extends "base.html" %}
+
+{% block title %}FAQ - Omen Astrology{% endblock %}
+
+{% block content %}
+
+  <!-- ========================================= -->
+  <!-- [FAQ - LIST SECTION] -->
+  <!-- ========================================= -->
+  <section class="section faq">
+    <div class="wrap faq-wrap">
+      <h1 class="h-title">FAQ</h1>
+
+      <details class="faq-item" open>
+        <summary>Do you use AI?</summary>
+        <p>No. All readings are written by hand.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>How long does it take?</summary>
+        <p>Written readings: 3 - 10 days depending on type. Live calls: next available slot.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>What if I don’t know my exact birth time?</summary>
+        <p>I can still read for you. I’ll explain limits and what we can do.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Do you predict exact events?</summary>
+        <p>I focus on what is active in your life and how to work with it. I avoid exact timing promises.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Are refunds possible?</summary>
+        <p>If I have not started the work, yes. After delivery, refunds are not offered.</p>
+      </details>
+
+      <details class="faq-item">
+        <summary>Is my data private?</summary>
+        <p>Yes. Your data is never shared with third parties.</p>
+      </details>
+      <details class="faq-item">
+        <summary>Are astrology readings medical, legal, or financial advice?</summary>
+        <p>Astrology services offered are for personal guidance and insight only. They are not medical, legal, or financial advice.</p>
+      </details>
+      <details class="faq-item">
+        <summary>How are results determined?</summary>
+        <p>Results are based on astrological analysis and personal interpretation.</p>
+      </details>
+    </div>
+  </section>
+
+{% endblock %}
+
+----- templates/index.html -----
+{% extends "base.html" %}
+
+{% block title %}Home - Omen Astrology{% endblock %}
+
+{% block content %}
+  <section class="hero">
+    <div class="hero-media" aria-hidden="true"></div>
+    <div class="hero-wash" aria-hidden="true"></div>
+
+    <div class="wrap">
+      <div class="hero-grid">
+        <div class="hero-left">
+          <div class="hero-content">
+            <h1 class="title">Omen Astrology</h1>
+            <p class="lede">
+  
+                Clarity, timing, and practical guidance — written or live consultations.
+</p>
+            <div class="cta-row">
+              <a class="btn btn-primary" href="{{ url_for('readings') }}">Get a Reading</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-right" aria-hidden="true"></div>
+      </div>
+    
+      </div>
+  </section>
+
+
+  <section id="services" class="section services">
+    <div class="wrap services-grid">
+
+      <div class="services-intro">
+        <h2 class="h-title">Readings &amp;<br>Consultations</h2>
+        <p class="h-lede">
+          Unlike simple fortune-telling, this discipline works on the principle
+          that the movements of the cosmos reflect, but do not cause, the powerful
+    
+              momentum of existence.
+By applying these universal patterns to your
+          personal chart, we offer grounded, reasonable interpretations that
+          deliver self-reflective insight - not just prediction - as the primary
+          purpose of every reading.
+</p>
+      </div>
+
+      <div class="cards-grid">
+        <a class="card" href="{{ url_for('readings') }}#natal">
+          <h3 class="card-title">Natal Chart Analysis</h3>
+          <p class="card-text">Temperament, talents, challenges, and current focus.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a 
+class="card" href="{{ url_for('readings') }}#orientation">
+          <h3 class="card-title">Orientation / Career Guidance</h3>
+          <p class="card-text">Strengths, direction, and timing for study/work moves.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a class="card" href="{{ url_for('readings') }}#love">
+          <h3 class="card-title">Love &amp;
+Relationship Guidance</h3>
+          <p class="card-text">Patterns in love, readiness, and next steps.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a class="card" href="{{ url_for('readings') }}#focus">
+          <h3 class="card-title">Other Focus Area</h3>
+          <p class="card-text">Family/Home, finances, health themes, relocation, studies, travel…</p>
+      
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a class="card" href="{{ url_for('readings') }}#annual">
+          <h3 class="card-title">Annual Horoscope (Solar Return)</h3>
+          <p class="card-text">Key themes, months, and practical timing for the year.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+    
+        <a class="card" href="{{ url_for('readings') }}#horary">
+          <h3 class="card-title">Horary Chart Analysis</h3>
+          <p class="card-text">One clear question, one focused judgment.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+
+        <a class="card" href="{{ url_for('readings') }}#synastry">
+          <h3 class="card-title">Synastry</h3>
+      
+          <p class="card-text">Two charts compared: flow, friction, and priorities.</p>
+          <span class="card-link">Learn more →</span>
+        </a>
+      </div>
+
+    </div>
+  </section>
+
+
+<section class="section home-readings">
+    <div class="wrap">
+      <h2 class="h-title">Start Your Journey</h2>
+      
+      <div class="readings-split">
+    
+        
+        <div class="readings-visual">
+            <h3 class="card-title" style="margin-top:0;">Your Blueprint: The Natal Chart</h3>
+            <p class="card-text">Every reading begins by accurately charting your moment of birth.
+This is the foundation of all focused analysis.</p>
+            <div class="chart-placeholder">
+                <img src="{{ url_for('static', filename='images/chart_example.png') }}" alt="Example of a Natal Astrology Chart">
+            </div>
+            <a class="btn btn-primary" href="{{ url_for('readings') }}" style="margin-top: 20px; width:100%;">Explore All Services</a>
+        </div>
+
+                
+        <div>
+            <p class="h-lede" style="margin-bottom: 24px;">We offer custom, detailed analysis across various astrological disciplines.
+Here are the two most popular entry points:</p>
+            
+            <div class="cards-grid">
+              <div class="card">
+                <h4 class="card-title">Foundational Natal Analysis</h4>
+                <p class="card-text">A foundational deep dive into your potential, 
+temperament, and life purpose. Essential starting point.</p>
+                <a class="card-link" href="{{ url_for('readings') }}#natal">View Details →</a>
+              </div>
+              <div class="card">
+                <h4 class="card-title">Synastry & Relationships</h4>
+              
+                  <p class="card-text">Understanding the dynamics between your chart and a partner's—harmonious flow and friction points.</p>
+                <a class="card-link" href="{{ url_for('readings') }}#synastry">View Details →</a>
+              </div>
+            </div>
+            
+            <div class="cta-row" style="margin-top: 
+30px;">
+                <a class="btn btn-ghost" href="{{ url_for('readings') }}">View Full Price List</a>
+            </div>
+
+        </div>
+
+      </div>
+    </div>
+</section>
+
+
+<section class="section about-preview">
+  <div class="wrap">
+    
+    <div class="intro-content"> 
+      <h2 class="h-title">Our Process & Commitment</h2>
+      <p class="h-lede">
+        Omen is a small team of practicing astrologers (my wife and I). We focus on delivering traditional, reliable guidance. Every reading is written with care, focusing on timing, patterns, and practical next steps — always personal, never automated.
+      </p>
+    </div>
+
+    <div class="steps" style="margin-top: 40px; margin-bottom: 40px;">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h3 class="step-title">Submit Your Request</h3>
+        <p class="step-text">Choose the type of reading and submit your birth data and questions.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h3 class="step-title">Chart Preparation</h3>
+        <p class="step-text">Our team studies your chart and focuses on the most critical themes and timing.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h3 class="step-title">Personal Delivery</h3>
+        <p class="step-text">You receive a clear, practical reading with concrete insights and next steps.</p>
+      </div>
+    </div>
+
+    <div class="intro-content"> 
+      <p>
+        We are focused on delivering the highest quality and most insightful astrological advice possible. Your honest feedback is invaluable as we grow. Every client's experience helps refine our commitment to clarity and precision.
+      </p>
+      <p style="font-style: italic; color: #555;">"I will reach out to you directly for feedback after your reading is delivered."</p>
+      
+      <div class="cta-row" style="margin-top: 30px;">
+          <a class="btn btn-primary" href="{{ url_for('about') }}">Meet the Team (About Us)</a>
+          <a class="btn btn-ghost" href="{{ url_for('contact') }}">Contact Us With Questions</a>
+      </div>
+    </div>
+
+  </div> </section> <section class="section testimonials">
+  <div class="wrap">
+    
+    <div class="intro-content"> 
+      <h2 class="h-title">What Clients Are Saying</h2>
+      <p class="h-lede">
+        Client feedback is essential. We are currently collecting our first round of reviews from recent clients.
+      </p>
+    </div>
+
+    <div class="testimonials-list" style="margin-top: 40px;">
+      
+      <div class="testimonial">
+        <blockquote>
+          "A very insightful and clear reading. It provided the practical guidance I was looking for and helped me understand my current situation."
+        </blockquote>
+        <figcaption>
+          — C.M.
+        </figcaption>
+      </div>
+
+      <div class="testimonial">
+        <blockquote>
+          "The annual horoscope was incredibly detailed and accurate. It's been a valuable map for the year. Highly recommend the PDF report."
+        </blockquote>
+        <figcaption>
+          — J. Alverez
+        </figcaption>
+      </div>
+
+      <div class="testimonial">
+        <blockquote>
+          "I was new to traditional astrology, and the 'Other Focus Area' reading was perfect. It directly addressed my questions about my career."
+        </blockquote>
+        <figcaption>
+          — S. Lee
+        </figcaption>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+
+<section class="section faq-preview">
+  <div class="wrap">
+    <div class="intro-content"> <h2 class="h-title">Quick Answers (FAQ)</h2>
+  
+          <div class="faq-list">
+        <details>
+          <summary>What information do you need from me?</summary>
+          <p>Birth date, time, and location.
+For horary, a clear question.</p>
+        </details>
+        <details>
+          <summary>How are readings delivered?</summary>
+          <p>Written PDF by default;
+live sessions are available on request.</p>
+        </details>
+        <details>
+          <summary>How long does it take?</summary>
+          <p>Most written readings are delivered within 5–7 days.</p>
+        </details>
+      </div>
+      <a class="btn btn-ghost" href="{{ url_for('faq') }}">See all FAQs</a>
+    </div>
+
+      </div>
+</section>
+
+<section class="section cta-strip">
+  <div class="wrap cta-strip-inner">
+    <p class="cta-strip-text">Ready to begin?
+Start with a Written Reading.</p>
+    <a class="btn btn-primary" href="{{ url_for('readings') }}">Get a Reading</a>
+  </div>
+</section>
+{% endblock %}
+
+
+----- templates/checkout.html -----
+{% extends "base.html" %}
+{% block title %}Checkout – Omen Astrology{% endblock %}
+{% block content %}
+<section class="section checkout">
+  <div class="wrap text-col">
+    <h1 class="h-title">Order Review</h1>
+    <ul>
+      {% for item in items %}
+        <li>{{ item.name }} ({{ item.reading_mode|upper }}): &euro;{{ '%.2f'|format(item.price) }}</li>
+      {% endfor %}
+    </ul>
+    <p><b>Total: &euro;{{ total }}</b></p>
+    <div id="paypal-buttons"></div>
+    {% if not paypal_enabled %}
+      <p style="color:#a00; font-size:0.95em; margin-top:8px;">PayPal is currently unavailable. Please use Crypto or contact support.</p>
+    {% endif %}
+    {% set is_natal_pdf = (items[0].reading_type == 'natal' and items[0].reading_mode == 'pdf') %}
+    {% if is_natal_pdf and nowpayments_enabled %}
+      <!-- Convert to POST to avoid GET side-effects -->
+      <form action="{{ url_for('crypto_checkout') }}" method="post" style="margin-top: 12px;">
+        <input type="hidden" name="reading" value="{{ items[0].reading_type }}" />
+        <input type="hidden" name="mode" value="{{ items[0].reading_mode }}" />
+        <input type="hidden" name="order_id" value="{{ order_id }}" />
+        <button type="submit" class="np-crypto-button" style="border:none; background:transparent; padding:0; cursor:pointer;">
+          <img src="https://nowpayments.io/images/embeds/payment-button-black.svg"
+               alt="Pay with Crypto via NOWPayments"
+               style="height:48px;"/>
+        </button>
+      </form>
+    {% elif is_natal_pdf and not nowpayments_enabled %}
+      <p style="color:#a00; font-size: 0.95em;">Crypto checkout temporarily unavailable.</p>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+{% if paypal_enabled %}
+  <script src="https://www.paypal.com/sdk/js?client-id={{ paypal_client_id }}&currency=EUR"></script>
+  <script>
+    (function(){
+      function initPayPal(){
+        if (!window.paypal || !document.getElementById('paypal-buttons')) return;
+        try{
+          window.paypal.Buttons({
+            createOrder: function() {
+              const orderId = "{{ order_id }}";
+              const reading = "{{ items[0].reading_type }}";
+              const mode = "{{ items[0].reading_mode }}";
+              return fetch(`/api/paypal/orders?order_id=${orderId}&reading=${reading}&mode=${mode}`, { method: "POST" })
+                .then(res => res.json())
+                .then(data => data.id);
+            },
+            onApprove: function (data) {
+              const orderId = "{{ order_id }}";
+              const reading = "{{ items[0].reading_type }}";
+              const mode = "{{ items[0].reading_mode }}";
+              return fetch(`/api/paypal/orders/${data.orderID}/capture?order_id=${orderId}&reading=${reading}&mode=${mode}`, { method: "POST" })
+                .then(async (r) => {
+                  if (!r.ok) {
+                    const t = await r.text().catch(() => "");
+                    alert("Server error capturing payment.\n" + t);
+                    return;
+                  }
+                  const res = await r.json().catch(() => ({}));
+                  if (res.redirect) window.location = res.redirect;
+                  else window.location = `/thankyou?status=paid&order_id=${orderId}`;
+                })
+                .catch(() => alert("Network error while capturing payment."));
+            },
+            onError: function(err) {
+              console.error(err);
+              window.location.href = "/thankyou?status=failed";
+            }
+          }).render('#paypal-buttons');
+        }catch(e){ console.error('PayPal init error', e); }
+      }
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initPayPal);
+      else initPayPal();
+    })();
+  </script>
+{% else %}
+  <script>
+    console.warn('PAYPAL_CLIENT_ID not configured; PayPal buttons disabled.');
+  </script>
+{% endif %}
+{% endblock %}
+
+
+----- templates/readings.html -----
+{% extends "base.html" %}
+
+{% block title %}Readings & Prices - Omen Astrology{% endblock %}
+
+{% block content %}
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="flash-message flash-{{ category }}" style="padding: 10px; margin: 10px 0; border: 1px solid; max-width: 1200px; margin-left: auto; margin-right: auto; text-align: center;">
+          {{ message }}
+        </div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <section class="section readings-intro">
+    <div class="wrap text-col">
+      <h1 class="h-title">Readings & Prices</h1>
+      <p>Select the reading that fits your need. Prices are transparent. Each reading is hand-written. No AI, no templates.</p>
+    </div>
+  </section>
+
+  <section class="section readings-grid">
+    <div class="wrap cards-grid">
+      {% for key, reading in readings.items() %}
+      <article id="{{ key }}" class="card pricing">
+        <h3 class="card-title">{{ reading.name }}</h3>
+        <p class="card-text">
+          {% if key == 'natal' %}A full look at temperament, behavior, relationships, money, career, family/Home, study, travel, and current focus.
+          {% elif key == 'orientation' %}Strengths and work style, direction for study/work, and better timing for changes or new starts.
+          {% elif key == 'love' %}What is active now in love, patterns to watch, realistic next steps and timing.
+          {% elif key == 'focus' %}One area of life (family/Home, finances, health themes, relocation, studies, travel, etc.). Sharp, practical guidance.
+          {% elif key == 'annual' %}One year overview (birthday to birthday): active Houses, key months, and practical timing notes.
+          {% elif key == 'horary' %}For a single, clear question (work, money, love, moving, lost items, timing, etc.). Focused judgment and reasoning.
+          {% elif key == 'synastry' %}Two charts compared: how the bond works in practice – flow, friction, and where to invest effort.
+          {% endif %}
+        </p>
+        <div class="btn-row" style="margin-top: 10px;">
+          <a href="{{ url_for('order_details', reading=key, mode='pdf') }}" class="btn btn-primary">Order PDF reading (&euro;{{ reading.pdf_price }})</a>
+          <a href="{{ url_for('order_details', reading=key, mode='video') }}" class="btn btn-ghost">Order Call (&euro;{{ reading.video_price }})</a>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+{% endblock %}
+
+
+----- templates/thankyou.html -----
+{% extends "base.html" %}
+
+{% block title %}Thank You - Omen Astrology{% endblock %}
+
+{% block content %}
+  <section class="section thankyou">
+    <div class="wrap text-col">
+      {% if status == 'paid' %}
+        <h1 class="h-title" style="color: green;">Order Confirmed!</h1>
+        <p class="h-lede">
+          Thank you for your purchase. Your order details have been permanently recorded.
+        </p>
+        <p>
+          <strong>Order ID: {{ order_id }}</strong><br>
+          A confirmation will be sent to your email shortly.
+        </p>
+
+        {% if video_session_needed %}
+          <hr style="margin: 2rem 0;">
+          <div style="background: #f0f8ff; border: 1px solid #3b0e41; padding: 20px; border-radius: 5px;">
+            <h2 style="margin-top: 0; color: #3b0e41;">&#10003; Next Step: Schedule Your Consultation</h2>
+            <p>Your payment is complete, but you still need to book your time slot for the live video session(s).</p>
+            <a href="https://cal.com/omen-traditional-astrology-1fueeq" target="_blank" class="btn btn-primary" style="background: #3b0e41; color: white;">
+              Go to Cal.com to Schedule Now
+            </a>
+          </div>
+        {% else %}
+          <p style="margin-top: 2rem;">
+            For your PDF reading(s), please allow {{ "5-7" if order_id and not video_session_needed else "a few" }} days for delivery. You will receive the file via email.
+          </p>
+        {% endif %}
+
+      {% elif status == 'failed' %}
+        <h1 class="h-title" style="color: red;">Payment Failed</h1>
+        <p class="h-lede">
+          We were unable to process your payment. Please return and try again, or contact us if the issue persists.
+        </p>
+        <a href="{{ url_for('readings') }}" class="btn btn-secondary">Back to Readings</a>
+        
+      {% elif status == 'error' %}
+        <h1 class="h-title" style="color: red;">Order Error</h1>
+        <p class="h-lede">
+          An unexpected error occurred during the finalization of your order. Please contact us immediately with your order ID (if you have one).
+        </p>
+        <a href="{{ url_for('contact') }}" class="btn btn-secondary">Contact Support</a>
+        
+      {% else %}
+        <h1 class="h-title">Thank You!</h1>
+        <p class="h-lede">
+          Your message has been sent successfully, or you've completed a step. We appreciate you reaching out!
+        </p>
+      {% endif %}
+
+    </div>
+  </section>
+{% endblock %}
+
+----- templates/order_details.html -----
+{% extends "base.html" %}
+
+{% block title %}Order Details – Omen Astrology{% endblock %}
+
+{% block content %}
+<section class="section booking-form">
+  <div class="wrap form-wrap">
+    <h1 class="h-title" style="margin-bottom:12px;">Your Details</h1>
+    <p class="h-lede" style="margin-top:0;">
+      Please enter your contact information and birth details for
+      <strong>{{ reading.name }}</strong> ({{ mode|upper }}).
+    </p>
+
+    <form class="form" action="{{ url_for('order_details') }}" method="post">
+      <input type="hidden" name="reading" value="{{ reading_key }}" />
+      <input type="hidden" name="mode" value="{{ mode }}" />
+
+      <div class="form-row grid2">
+        <div>
+          <label for="name">Full Name</label>
+          <input id="name" name="name" type="text" required />
+        </div>
+        <div>
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" required />
+        </div>
+      </div>
+
+      <div class="form-row grid2">
+        <div>
+          <label for="birth_date">Date of Birth</label>
+          <input id="birth_date" name="birth_date" type="date" />
+        </div>
+        <div>
+          <label for="birth_time">Time of Birth (if known)</label>
+          <input id="birth_time" name="birth_time" type="time" />
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label for="birth_place">Place of Birth</label>
+        <input id="birth_place" name="birth_place" type="text" placeholder="City, Country" />
+      </div>
+
+      <hr style="margin: 24px 0;" />
+
+      <h3 style="margin-top:0;">Optional: Second Person (for Synastry)</h3>
+      <div class="form-row grid2">
+        <div>
+          <label for="secondary_birth_date">Date of Birth (Secondary)</label>
+          <input id="secondary_birth_date" name="secondary_birth_date" type="date" />
+        </div>
+        <div>
+          <label for="secondary_birth_time">Time of Birth (Secondary)</label>
+          <input id="secondary_birth_time" name="secondary_birth_time" type="time" />
+        </div>
+      </div>
+      <div class="form-row">
+        <label for="secondary_birth_place">Place of Birth (Secondary)</label>
+        <input id="secondary_birth_place" name="secondary_birth_place" type="text" placeholder="City, Country" />
+      </div>
+
+      <div class="form-row">
+        <label for="question">Your Question / Focus Area (optional)</label>
+        <textarea id="question" name="question" rows="4" placeholder="Tell me what you want to focus on"></textarea>
+      </div>
+
+      <div class="btn-row" style="margin-top: 8px;">
+        <button type="submit" class="btn btn-primary">Continue to Checkout</button>
+      </div>
+    </form>
+  </div>
+  
+</section>
+{% endblock %}
+
+
+

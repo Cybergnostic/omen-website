@@ -36,8 +36,8 @@
           {% endif %}
         </p>
         <div class="btn-row" style="margin-top: 10px;">
-          <a href="{{ url_for('checkout', reading=key, mode='pdf') }}" class="btn btn-primary">Order PDF reading (&euro;{{ reading.pdf_price }})</a>
-          <a href="{{ url_for('checkout', reading=key, mode='video') }}" class="btn btn-ghost">Order Call (&euro;{{ reading.video_price }})</a>
+          <a href="{{ url_for('order_details', reading=key, mode='pdf') }}" class="btn btn-primary">Order PDF reading (&euro;{{ reading.pdf_price }})</a>
+          <a href="{{ url_for('order_details', reading=key, mode='video') }}" class="btn btn-ghost">Order Call (&euro;{{ reading.video_price }})</a>
         </div>
       </article>
       {% endfor %}

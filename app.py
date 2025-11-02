@@ -21,7 +21,7 @@ except Exception:
 
 # --- CONFIGURATION ---
 BASE_DIR = Path(__file__).resolve().parent
-DATABASE = 'data/omen_orders.db'
+DATABASE = os.environ.get("OMEN_DB_PATH", str(BASE_DIR / 'data' / 'omen_orders.db'))
 # IMPORTANT: This secret key is for development only. Use a long, random key in production.
 app = Flask(
     __name__,
@@ -141,6 +141,74 @@ def readings():
     # Only pass readings data to the template
     return render_template("readings.html", readings=READINGS, cart_count=0)
 
+@app.route("/order/details", methods=["GET", "POST"])
+def order_details():
+    reading_key = (request.values.get("reading") or "").strip()
+    mode = (request.values.get("mode") or "").strip()
+    reading = READINGS.get(reading_key)
+    if not reading or mode not in ("pdf", "video"):
+        flash("Invalid reading selection.", "danger")
+        return redirect(url_for("readings"))
+
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        email = request.form.get("email", "").strip()
+        birth_date = request.form.get("birth_date")
+        birth_time = request.form.get("birth_time")
+        birth_place = request.form.get("birth_place")
+        secondary_birth_date = request.form.get("secondary_birth_date")
+        secondary_birth_time = request.form.get("secondary_birth_time")
+        secondary_birth_place = request.form.get("secondary_birth_place")
+        question = request.form.get("question")
+
+        if not name or not email:
+            flash("Name and email are required.", "danger")
+            return redirect(url_for("order_details", reading=reading_key, mode=mode))
+
+        oid = str(uuid4())
+        try:
+            db = get_db()
+            db.execute(
+                """
+                INSERT INTO orders (
+                    order_id, timestamp, name, email, total_price, payment_status, completion_status,
+                    birth_date, birth_time, birth_place, secondary_birth_date, secondary_birth_time, secondary_birth_place,
+                    status, created_at, reading, mode
+                ) VALUES (
+                    ?, datetime('now'), ?, ?, NULL, 'unpaid', 'new',
+                    ?, ?, ?, ?, ?, ?, 'created', datetime('now'), ?, ?
+                )
+                """,
+                (
+                    oid, name, email,
+                    birth_date, birth_time, birth_place,
+                    secondary_birth_date, secondary_birth_time, secondary_birth_place,
+                    reading_key, mode,
+                ),
+            )
+            db.execute(
+                """
+                INSERT INTO order_items (order_id, item_id, reading_type, reading_mode, price, question)
+                VALUES (?, ?, ?, ?, NULL, ?)
+                """,
+                (oid, str(uuid4()), reading_key, mode, question),
+            )
+            db.commit()
+        except Exception:
+            app.logger.exception("Failed to create order with details")
+            flash("Could not create your order. Please try again.", "danger")
+            return redirect(url_for("readings"))
+
+        return redirect(url_for("checkout", reading=reading_key, mode=mode, order_id=oid))
+
+    return render_template(
+        "order_details.html",
+        reading_key=reading_key,
+        reading=reading,
+        mode=mode,
+        cart_count=0,
+    )
+
 @app.route("/contact")
 def contact():
     return render_template("contact.html", cart_count=0)
@@ -221,11 +289,17 @@ def checkout():
     # Get reading and mode from query parameters
     reading_key = request.args.get("reading")
     mode = request.args.get("mode")
+    existing_order_id = request.args.get("order_id")
     # fallback or error if invalid
     reading = READINGS.get(reading_key)
     if not reading or mode not in ("pdf", "video"):
         flash("Invalid reading selection.", "danger")
         return redirect(url_for("readings"))
+    # Require order details first
+    if not existing_order_id:
+        flash("Please enter your details to continue.", "info")
+        return redirect(url_for("order_details", reading=reading_key, mode=mode))
+
     # Build item details
     price = reading["pdf_price"] if mode == "pdf" else reading["video_price"]
     item = {
@@ -236,7 +310,7 @@ def checkout():
         "reading_type": reading_key,
         "question": None,  # Not collected here
     }
-    order_id = str(uuid4())
+    order_id = existing_order_id
     total_str = f"{price:.2f}"
     # All checkout now per-item; no cart, no user info at this page
     return render_template(
@@ -400,6 +474,24 @@ def api_paypal_capture(paypal_order_id):
         app.logger.exception("Failed to parse PayPal capture amount")
         return {"error": f"parse_amount_failed: {e}", "raw": data}, 500
 
+    # attempt to read payer info
+    payer_email = None
+    payer_name = None
+    try:
+        payer = data.get("payer") or {}
+        payer_email = payer.get("email_address")
+        name = payer.get("name") or {}
+        if name:
+            gn = name.get("given_name") or ""
+            sn = name.get("surname") or ""
+            payer_name = (gn + " " + sn).strip() or None
+        if not payer_name:
+            ship = (data.get("purchase_units") or [{}])[0].get("shipping") or {}
+            full_name = (ship.get("name") or {}).get("full_name")
+            payer_name = full_name or payer_name
+    except Exception:
+        app.logger.info("No payer name/email in capture payload")
+
     db = get_db()
     try:
         # 1) upsert the order row as paid
@@ -426,10 +518,12 @@ def api_paypal_capture(paypal_order_id):
                    captured_at = datetime('now'),
                    paypal_order_id = COALESCE(?, paypal_order_id),
                    reading = COALESCE(?, reading),
-                   mode = COALESCE(?, mode)
+                   mode = COALESCE(?, mode),
+                   email = COALESCE(?, email),
+                   name = COALESCE(?, name)
              WHERE order_id = ?
             """,
-            (amount_value, paypal_order_id, reading, mode, internal_id),
+            (amount_value, paypal_order_id, reading, mode, payer_email, payer_name, internal_id),
         )
 
         # 3) insert a single line item that mirrors the reading
