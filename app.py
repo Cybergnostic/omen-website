@@ -109,6 +109,122 @@ def init_db():
 init_db()
 
 
+# --- NOTIFICATIONS & CSV LOGGING ---
+def _send_discord(text: str) -> bool:
+    """Send a message to Discord via webhook URL in DISCORD_WEBHOOK_URL.
+    Logs status codes and missing env to aid debugging.
+    """
+    webhook = os.environ.get("DISCORD_WEBHOOK_URL")
+    if not webhook:
+        app.logger.warning("DISCORD_WEBHOOK_URL not set; skipping Discord notify")
+        return False
+    try:
+        resp = requests.post(webhook, json={"content": text}, timeout=10)
+        app.logger.info("Discord webhook POST status=%s", getattr(resp, "status_code", "?"))
+        resp.raise_for_status()
+        return True
+    except Exception:
+        app.logger.exception("Discord notification failed")
+        return False
+
+
+ORDER_CSV_HEADERS = [
+    "ts",
+    "event",
+    "order_id",
+    "name",
+    "email",
+    "reading",
+    "mode",
+    "payment_status",
+    "amount",
+    "currency",
+    "birth_date",
+    "birth_time",
+    "birth_place",
+    "secondary_birth_date",
+    "secondary_birth_time",
+    "secondary_birth_place",
+    "question",
+    "payer_name",
+    "payer_email",
+]
+
+
+def _append_order_csv(row: dict) -> None:
+    try:
+        Path(BASE_DIR / "data").mkdir(exist_ok=True)
+        csv_path = BASE_DIR / "data" / "orders_events.csv"
+        write_header = not csv_path.exists()
+        safe_row = {k: row.get(k) for k in ORDER_CSV_HEADERS}
+        with open(csv_path, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=ORDER_CSV_HEADERS)
+            if write_header:
+                writer.writeheader()
+            writer.writerow(safe_row)
+    except Exception:
+        app.logger.exception("Failed to append order event CSV")
+
+
+def notify_order(event: str, order_id: str, **fields) -> None:
+    """Append a CSV event row and send a Discord message.
+    By default, Discord sends only for event == 'paid'. To also send for 'created', set DISCORD_NOTIFY_CREATED=1.
+    """
+    ts = datetime.utcnow().isoformat()
+    # CSV log
+    csv_row = {"ts": ts, "event": event, "order_id": order_id}
+    csv_row.update(fields)
+    _append_order_csv(csv_row)
+
+    # Discord text
+    send_created = os.environ.get("DISCORD_NOTIFY_CREATED", "0") in ("1", "true", "True")
+    if event == "paid" or (event == "created" and send_created):
+        form_name = fields.get('form_name') or fields.get('name')
+        form_email = fields.get('form_email') or fields.get('email')
+        text_lines = [
+            f"Event: {event}",
+            f"Order ID: {order_id}",
+            f"Reading/Mode: {fields.get('reading')}/{fields.get('mode')}",
+            f"Form Name: {form_name} | Form Email: {form_email}",
+        ]
+        amt = fields.get("amount")
+        ccy = fields.get("currency")
+        if amt is not None and ccy:
+            text_lines.append(f"Amount: {amt} {ccy}")
+        # Include payer information if available (from PayPal payload)
+        payer_name = fields.get("payer_name")
+        payer_email = fields.get("payer_email")
+        if payer_name or payer_email:
+            text_lines.append(f"Payer: {payer_name or ''} | {payer_email or ''}")
+        # Include all form-submitted details explicitly
+        def _fmt(v):
+            try:
+                s = (v or "").strip()
+                return s if s else "—"
+            except Exception:
+                return v if v else "—"
+        text_lines += [
+            "",
+            "Form Details",
+            f"Full Name: {_fmt(fields.get('name'))}",
+            f"Email: {_fmt(fields.get('email'))}",
+            f"Date of Birth: {_fmt(fields.get('birth_date'))}",
+            f"Time of Birth: {_fmt(fields.get('birth_time'))}",
+            f"Place of Birth: {_fmt(fields.get('birth_place'))}",
+            f"Date of Birth (Secondary): {_fmt(fields.get('secondary_birth_date'))}",
+            f"Time of Birth (Secondary): {_fmt(fields.get('secondary_birth_time'))}",
+            f"Place of Birth (Secondary): {_fmt(fields.get('secondary_birth_place'))}",
+            f"Your Question / Focus Area: {_fmt(fields.get('question'))}",
+        ]
+        sent = _send_discord("\n".join(text_lines))
+        app.logger.info("Discord notify event=%s order=%s sent=%s", event, order_id, sent)
+
+# Small diagnostic endpoint (local use): send a test Discord message
+@app.route("/debug/notify")
+def debug_notify():
+    ok = _send_discord("Debug ping from Omen app")
+    return jsonify({"ok": ok, "has_env": bool(os.environ.get("DISCORD_WEBHOOK_URL"))})
+
 # --- READING DATA & PADDLE LINKS ---
 # Dictionary of reading information (names and prices)
 READINGS = {
@@ -194,6 +310,29 @@ def order_details():
                 (oid, str(uuid4()), reading_key, mode, question),
             )
             db.commit()
+            # Log 'created' to CSV and optionally Discord
+            notify_order(
+                "created",
+                oid,
+                name=name,
+                email=email,
+                form_name=name,
+                form_email=email,
+                reading=reading_key,
+                mode=mode,
+                payment_status="unpaid",
+                amount=None,
+                currency=None,
+                birth_date=birth_date,
+                birth_time=birth_time,
+                birth_place=birth_place,
+                secondary_birth_date=secondary_birth_date,
+                secondary_birth_time=secondary_birth_time,
+                secondary_birth_place=secondary_birth_place,
+                question=question,
+                payer_name=None,
+                payer_email=None,
+            )
         except Exception:
             app.logger.exception("Failed to create order with details")
             flash("Could not create your order. Please try again.", "danger")
@@ -519,8 +658,8 @@ def api_paypal_capture(paypal_order_id):
                    paypal_order_id = COALESCE(?, paypal_order_id),
                    reading = COALESCE(?, reading),
                    mode = COALESCE(?, mode),
-                   email = COALESCE(?, email),
-                   name = COALESCE(?, name)
+                   email = COALESCE(email, ?),
+                   name = COALESCE(name, ?)
              WHERE order_id = ?
             """,
             (amount_value, paypal_order_id, reading, mode, payer_email, payer_name, internal_id),
@@ -536,6 +675,47 @@ def api_paypal_capture(paypal_order_id):
         )
 
         db.commit()
+
+        # 4) notify via Discord/CSV that payment was received
+        try:
+            row = db.execute(
+                """
+                SELECT name,email,reading,mode,
+                       birth_date,birth_time,birth_place,
+                       secondary_birth_date,secondary_birth_time,secondary_birth_place
+                  FROM orders WHERE order_id=?
+                """,
+                (internal_id,),
+            ).fetchone()
+            qrow = db.execute(
+                "SELECT question FROM order_items WHERE order_id=? AND question IS NOT NULL ORDER BY rowid DESC LIMIT 1",
+                (internal_id,),
+            ).fetchone()
+            question = qrow[0] if qrow else None
+            notify_order(
+                "paid",
+                internal_id,
+                name=(row["name"] if row else None),
+                email=(row["email"] if row else None),
+                form_name=(row["name"] if row else None),
+                form_email=(row["email"] if row else None),
+                reading=(row["reading"] if row else reading),
+                mode=(row["mode"] if row else mode),
+                payment_status="paid",
+                amount=amount_value,
+                currency=amount_ccy,
+                birth_date=(row["birth_date"] if row else None),
+                birth_time=(row["birth_time"] if row else None),
+                birth_place=(row["birth_place"] if row else None),
+                secondary_birth_date=(row["secondary_birth_date"] if row else None),
+                secondary_birth_time=(row["secondary_birth_time"] if row else None),
+                secondary_birth_place=(row["secondary_birth_place"] if row else None),
+                question=question,
+                payer_name=payer_name,
+                payer_email=payer_email,
+            )
+        except Exception:
+            app.logger.exception("Notify paid (PayPal) failed")
     except Exception as e:
         db.rollback()
         app.logger.exception("DB error updating order after capture")
@@ -641,6 +821,48 @@ def crypto_webhook():
                 (str(uuid4()), order_id),
             )
             db.commit()
+            # Notify paid via Discord/CSV
+            try:
+                row = db.execute(
+                    """
+                    SELECT name,email,reading,mode,
+                           birth_date,birth_time,birth_place,
+                           secondary_birth_date,secondary_birth_time,secondary_birth_place
+                      FROM orders WHERE order_id=?
+                    """,
+                    (order_id,),
+                ).fetchone()
+                qrow = db.execute(
+                    "SELECT question FROM order_items WHERE order_id=? AND question IS NOT NULL ORDER BY rowid DESC LIMIT 1",
+                    (order_id,),
+                ).fetchone()
+                question = qrow[0] if qrow else None
+                amount = data.get("price_amount") or pay_amount
+                currency = data.get("price_currency") or data.get("pay_currency")
+                notify_order(
+                    "paid",
+                    order_id,
+                    name=(row["name"] if row else None),
+                    email=(row["email"] if row else None),
+                    form_name=(row["name"] if row else None),
+                    form_email=(row["email"] if row else None),
+                    reading=(row["reading"] if row else None),
+                    mode=(row["mode"] if row else None),
+                    payment_status="paid",
+                    amount=amount,
+                    currency=currency,
+                    birth_date=(row["birth_date"] if row else None),
+                    birth_time=(row["birth_time"] if row else None),
+                    birth_place=(row["birth_place"] if row else None),
+                    secondary_birth_date=(row["secondary_birth_date"] if row else None),
+                    secondary_birth_time=(row["secondary_birth_time"] if row else None),
+                    secondary_birth_place=(row["secondary_birth_place"] if row else None),
+                    question=question,
+                    payer_name=None,
+                    payer_email=None,
+                )
+            except Exception:
+                app.logger.exception("Notify paid (NOWPayments) failed")
         except Exception:
             app.logger.exception("NOWPayments DB update error")
     return "OK", 200
