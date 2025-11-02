@@ -146,6 +146,9 @@ body{
   background: rgba(58,24,71,.06); border-color: rgba(58,24,71,.45); transform: translateY(-1px);
 }
 
+/* NOWPayments button spacing to match PayPal */
+.np-crypto-button img { display:block; margin:16px 0; }
+
 
 /* =========================================
    [COMPONENTS - CARDS GRID]

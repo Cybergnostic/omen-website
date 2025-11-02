@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}About - Omen Astrology{% endblock %}
+{% block title %}Home - Omen Astrology{% endblock %}
 
 {% block content %}
   <section class="hero">
@@ -111,7 +111,7 @@ Relationship Guidance</h3>
             <p class="card-text">Every reading begins by accurately charting your moment of birth.
 This is the foundation of all focused analysis.</p>
             <div class="chart-placeholder">
-                <img src="{{ url_for('static', filename='images/natal_chart_example.png') }}" alt="Example of a Natal Astrology Chart"> 
+                <img src="{{ url_for('static', filename='images/chart_example.png') }}" alt="Example of a Natal Astrology Chart">
             </div>
             <a class="btn btn-primary" href="{{ url_for('readings') }}" style="margin-top: 20px; width:100%;">Explore All Services</a>
         </div>

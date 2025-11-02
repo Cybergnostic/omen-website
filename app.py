@@ -1,14 +1,22 @@
 # app.py
-from flask import Flask, render_template, request, redirect, url_for, session, g, flash, jsonify, make_response
+from flask import Flask, render_template, request, redirect, url_for, g, flash, jsonify, make_response
 from pathlib import Path
 from datetime import datetime
 import sqlite3
 import csv 
-import uuid # Still useful if we generate internal IDs, though not needed for cart logic now
 import os
 import requests
-from flask.views import MethodView
 from uuid import uuid4
+import logging
+import hmac
+import hashlib
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    # dotenv is optional; ignore if missing
+    pass
 
 
 # --- CONFIGURATION ---
@@ -21,6 +29,9 @@ app = Flask(
     template_folder="templates"
 )
 app.secret_key = b'your_long_and_secret_key_here' 
+
+# Configure logging
+app.logger.setLevel(logging.INFO)
 
 
 # --- DATABASE UTILITIES ---
@@ -46,14 +57,12 @@ def migrate_orders_table(db):
     def add(col, sql):
         if col not in cols:
             db.execute(sql)
-    add("order_id",        "ALTER TABLE orders ADD COLUMN order_id TEXT;")
     add("paypal_order_id", "ALTER TABLE orders ADD COLUMN paypal_order_id TEXT;")
     add("status",          "ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'created';")
     add("created_at",      "ALTER TABLE orders ADD COLUMN created_at TEXT DEFAULT CURRENT_TIMESTAMP;")
     add("captured_at",     "ALTER TABLE orders ADD COLUMN captured_at TEXT;")
     add("reading",         "ALTER TABLE orders ADD COLUMN reading TEXT;")
     add("mode",            "ALTER TABLE orders ADD COLUMN mode TEXT;")
-    db.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_order_id ON orders(order_id);")
     db.commit()
 
 def init_db():
@@ -149,51 +158,25 @@ def privacy():
 def thankyou():
     status = request.args.get('status')
     order_id = request.args.get('order_id')
-    return render_template("thankyou.html", 
-                           cart_count=0,
-                           status=status,
-                           order_id=order_id,
-                           video_session_needed=False)
+    video_session_needed = False
+    if order_id:
+        try:
+            db = get_db()
+            row = db.execute("SELECT mode FROM orders WHERE order_id=?", (order_id,)).fetchone()
+            if row and (row["mode"] or row[0]) == "video":
+                video_session_needed = True
+        except Exception:
+            app.logger.exception("Failed to determine video_session_needed")
+    return render_template(
+        "thankyou.html",
+        cart_count=0,
+        status=status,
+        order_id=order_id,
+        video_session_needed=video_session_needed,
+    )
 
 
-# --- DEPRECATED/REMOVED CART & MOCK PAYMENT ROUTES ---
-
-@app.route("/booking")
-def booking():
-    # DEPRECATED: Redirecting to readings page to start flow over
-    flash('The old booking page has been removed. Please select a reading below.', 'info')
-    return redirect(url_for("readings"))
-
-@app.route("/submit_booking", methods=["POST"])
-def submit_booking():
-    # DEPRECATED: Redirecting to readings page
-    return redirect(url_for("readings")) 
-
-@app.route("/add_to_cart", methods=["POST"])
-def add_to_cart():
-    # DEPRECATED: The cart is removed.
-    flash('The shopping cart has been removed. Please use the direct order buttons.', 'info')
-    return redirect(url_for("readings"))
-
-@app.route("/cart")
-def cart():
-    # DEPRECATED: The cart page is removed.
-    return redirect(url_for("readings"))
-
-@app.route("/remove_from_cart/<item_id>")
-def remove_from_cart(item_id):
-    # DEPRECATED: The cart is removed.
-    return redirect(url_for("readings"))
-
-@app.route("/data_entry")
-def data_entry():
-    # DEPRECATED: Data collection moves to a new pre-checkout form (not implemented yet)
-    return redirect(url_for("readings"))
-
-@app.route("/save_data", methods=["POST"])
-def save_data():
-    # DEPRECATED
-    return redirect(url_for("readings"))
+# --- DEPRECATED/REMOVED CART & MOCK PAYMENT ROUTES --- removed
 
 # --- PAYPAL ENV CONFIG ---
 PAYPAL_ENV = os.environ.get("PAYPAL_ENV", "sandbox")  # default to sandbox
@@ -205,6 +188,20 @@ PAYPAL_API_BASE = (
     if PAYPAL_ENV == "sandbox"
     else "https://api-m.paypal.com"
 )
+
+# --- NOWPAYMENTS CONFIG --- (support legacy var names)
+NOWPAYMENTS_API_KEY = (
+    os.environ.get("NOWPAYMENTS_API_KEY")
+    or os.environ.get("NOWPAY_API_KEY")
+    or ""
+)
+NOWPAYMENTS_IPN_SECRET = (
+    os.environ.get("NOWPAYMENTS_IPN_SECRET")
+    or os.environ.get("NOWPAY_IPN_SECRET")
+    or ""
+)
+NOWPAYMENTS_PAY_CURRENCY = os.environ.get("NOWPAYMENTS_PAY_CURRENCY", "USDTTRC20")
+NOWPAYMENTS_API_BASE = "https://api.nowpayments.io/v1"
 
 # --- PAYPAL OAUTH UTILITY ---
 def get_paypal_access_token():
@@ -248,24 +245,66 @@ def checkout():
         total=total_str,
         currency="EUR",
         paypal_client_id=PAYPAL_CLIENT_ID,
+        paypal_enabled=bool(PAYPAL_CLIENT_ID and PAYPAL_CLIENT_ID != "your-client-id"),
+        nowpayments_enabled=bool(NOWPAYMENTS_API_KEY),
         order_id=order_id,
         cart_count=0,
     )
 
-@app.route("/mock_payment_gateway")
-def mock_payment_gateway():
-    # DEPRECATED
-    return redirect(url_for("readings"))
+# Create NOWPayments invoice and redirect user to payment page (POST only)
+@app.route("/crypto/checkout", methods=["POST"])
+def crypto_checkout():
+    reading_key = request.form.get("reading")
+    mode = request.form.get("mode")
+    order_id = request.form.get("order_id")
+    reading = READINGS.get(reading_key)
+    if not reading or mode not in ("pdf", "video") or not order_id:
+        flash("Invalid payment request.", "danger")
+        return redirect(url_for("readings"))
 
-@app.route("/payment_success")
-def payment_success():
-    # DEPRECATED. A REAL PADDLE WEBHOOK WILL REPLACE THIS ROUTE LATER.
-    return redirect(url_for("readings"))
+    price = reading["pdf_price"] if mode == "pdf" else reading["video_price"]
+    price_float = float(price)
 
-@app.route("/clear_cart")
-def clear_cart():
-    # DEPRECATED
-    return redirect(url_for("readings"))
+    payload = {
+        "price_amount": price_float,
+        "price_currency": "EUR",
+        "pay_currency": NOWPAYMENTS_PAY_CURRENCY,
+        "order_id": order_id,
+        "order_description": f"{reading['name']} ({mode})",
+    }
+    headers = {
+        "x-api-key": NOWPAYMENTS_API_KEY,
+        "Content-Type": "application/json",
+    }
+
+    try:
+        resp = requests.post(
+            f"{NOWPAYMENTS_API_BASE}/invoice", json=payload, headers=headers, timeout=20
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        invoice_url = data.get("invoice_url")
+        if not invoice_url:
+            raise Exception("No invoice_url returned")
+
+        db = get_db()
+        db.execute(
+            """
+            INSERT OR IGNORE INTO orders (
+                order_id, timestamp, total_price, payment_status, completion_status,
+                status, created_at, reading, mode
+            ) VALUES (?, datetime('now'), ?, 'unpaid', 'new', 'created', datetime('now'), ?, ?)
+            """,
+            (order_id, price_float, reading_key, mode),
+        )
+        db.commit()
+
+        return redirect(invoice_url)
+    except Exception:
+        app.logger.exception("NOWPayments invoice error")
+        flash("Crypto payment initialization failed. Try again.", "danger")
+        return redirect(url_for("readings"))
+# Deprecated payment routes removed
 
 # --- PAYPAL API ROUTES ---
 @app.route("/api/paypal/orders", methods=["POST"])
@@ -288,10 +327,19 @@ def api_paypal_orders():
             "shipping_preference": "NO_SHIPPING"
         }
     }
-    headers = {"Authorization": f"Bearer {get_paypal_access_token()}", "Content-Type": "application/json"}
-    r = requests.post(f"{PAYPAL_API_BASE}/v2/checkout/orders", json=body, headers=headers, timeout=20)
-    r.raise_for_status()
-    data = r.json()
+    try:
+        headers = {
+            "Authorization": f"Bearer {get_paypal_access_token()}",
+            "Content-Type": "application/json",
+        }
+        r = requests.post(
+            f"{PAYPAL_API_BASE}/v2/checkout/orders", json=body, headers=headers, timeout=20
+        )
+        r.raise_for_status()
+        data = r.json()
+    except requests.RequestException:
+        app.logger.exception("PayPal create order failed")
+        return jsonify({"error": "paypal_create_failed"}), 502
 
     # Persist a 'created' order note (do not fail the PayPal call on DB error)
     internal_id = request.args.get("order_id")
@@ -312,21 +360,28 @@ def api_paypal_orders():
             (internal_id, data.get("id"), reading, mode),
         )
         db.commit()
-    except Exception as e:
-        print("create-order DB note failed:", e)
+    except Exception:
+        app.logger.exception("create-order DB note failed")
 
     return jsonify(data), 201
 
 @app.route("/api/paypal/orders/<paypal_order_id>/capture", methods=["POST"])
 def api_paypal_capture(paypal_order_id):
-    token = get_paypal_access_token()
-    r = requests.post(
-        f"{PAYPAL_API_BASE}/v2/checkout/orders/{paypal_order_id}/capture",
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
-        timeout=20,
-    )
-    r.raise_for_status()
-    data = r.json()
+    try:
+        token = get_paypal_access_token()
+        r = requests.post(
+            f"{PAYPAL_API_BASE}/v2/checkout/orders/{paypal_order_id}/capture",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+            timeout=20,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except requests.RequestException:
+        app.logger.exception("PayPal capture failed")
+        return {"error": "paypal_capture_failed"}, 502
 
     # require final status
     if data.get("status") != "COMPLETED":
@@ -342,6 +397,7 @@ def api_paypal_capture(paypal_order_id):
         amount_value = float(cap["amount"]["value"])
         amount_ccy = cap["amount"]["currency_code"]
     except Exception as e:
+        app.logger.exception("Failed to parse PayPal capture amount")
         return {"error": f"parse_amount_failed: {e}", "raw": data}, 500
 
     db = get_db()
@@ -388,12 +444,16 @@ def api_paypal_capture(paypal_order_id):
         db.commit()
     except Exception as e:
         db.rollback()
+        app.logger.exception("DB error updating order after capture")
         return {"error": f"db_error: {e}"}, 500
 
     return {"redirect": url_for("thankyou", status="paid", order_id=internal_id)}, 200
 
 @app.route("/webhooks/paypal", methods=["POST"])
 def paypal_webhook():
+    if not PAYPAL_WEBHOOK_ID:
+        app.logger.error("PAYPAL_WEBHOOK_ID not set; cannot verify webhook")
+        return make_response("", 400)
     headers = request.headers
     required_headers = [
         "PAYPAL-TRANSMISSION-ID",
@@ -413,11 +473,20 @@ def paypal_webhook():
         "webhook_id": webhook_id,
         "webhook_event": request.get_json(force=True)
     }
-    resp = requests.post(f"{PAYPAL_API_BASE}/v1/notifications/verify-webhook-signature", json=verify_body, headers={"Authorization": f"Bearer {get_paypal_access_token()}", "Content-Type": "application/json"}, timeout=20)
+    resp = requests.post(
+        f"{PAYPAL_API_BASE}/v1/notifications/verify-webhook-signature",
+        json=verify_body,
+        headers={
+            "Authorization": f"Bearer {get_paypal_access_token()}",
+            "Content-Type": "application/json",
+        },
+        timeout=20,
+    )
     try:
         resp.raise_for_status()
         result = resp.json()
     except Exception:
+        app.logger.exception("PayPal webhook verify failed")
         return make_response("", 400)
     event = verify_body["webhook_event"]
     # Only update paid if verified and correct event
@@ -432,6 +501,55 @@ def paypal_webhook():
                 db.execute("UPDATE orders SET payment_status = 'paid' WHERE order_id = ?", (custom_id,))
                 db.commit()
     return make_response("", 200)
+
+@app.route("/webhooks/crypto", methods=["POST"])
+def crypto_webhook():
+    signature = request.headers.get("x-nowpayments-sig", "")
+    raw_body = request.get_data()
+    try:
+        calc_sig = hmac.new(
+            NOWPAYMENTS_IPN_SECRET.encode("utf-8"), raw_body, hashlib.sha512
+        ).hexdigest()
+    except Exception:
+        app.logger.exception("NOWPayments signature generation failed")
+        return "invalid signature", 403
+    if not hmac.compare_digest(calc_sig, signature):
+        app.logger.warning("NOWPayments signature mismatch")
+        return "invalid signature", 403
+
+    data = request.get_json(force=True)
+    payment_status = data.get("payment_status")
+    order_id = data.get("order_id")
+    pay_amount = data.get("pay_amount")
+
+    if not order_id:
+        return "no order id", 200
+
+    if payment_status in ("finished", "confirmed", "paid"):
+        try:
+            db = get_db()
+            db.execute(
+                """
+                UPDATE orders
+                SET payment_status='paid',
+                    status='captured',
+                    total_price=COALESCE(?, total_price),
+                    captured_at=datetime('now')
+                WHERE order_id=?
+                """,
+                (pay_amount, order_id),
+            )
+            db.execute(
+                """
+                INSERT OR IGNORE INTO order_items (order_id, item_id, reading_type, reading_mode, price, question)
+                SELECT order_id, ?, reading, mode, total_price, NULL FROM orders WHERE order_id=?
+                """,
+                (str(uuid4()), order_id),
+            )
+            db.commit()
+        except Exception:
+            app.logger.exception("NOWPayments DB update error")
+    return "OK", 200
 
 # --- CONTACT FORM ---
 
@@ -465,7 +583,7 @@ def submit_contact():
 
 
 if __name__ == "__main__":
-    print(">>> Initializing database...")
+    app.logger.info(">>> Initializing database...")
     init_db()
-    print(">>> Running app...")
-    app.run(debug=True)
+    app.logger.info(">>> Running app...")
+    app.run(debug=os.environ.get("FLASK_DEBUG", "0") == "1")

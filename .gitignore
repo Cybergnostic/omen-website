@@ -8,14 +8,17 @@ __pycache__/
 Thumbs.db
 .idea/
 .vscode/
-.all_code.txt
+all_code.txt
 
 # env / secrets
 .env
+env.local.sh
 
 # build/output (if any later)
 dist/
 build/
 
-# optional: comment out the next line if you WANT to sync bookings file
-# data/bookings.csv
+# local data files
+data/
+*.db
+*.csv

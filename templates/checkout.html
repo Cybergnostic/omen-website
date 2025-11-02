@@ -11,48 +11,76 @@
     </ul>
     <p><b>Total: &euro;{{ total }}</b></p>
     <div id="paypal-buttons"></div>
+    {% if not paypal_enabled %}
+      <p style="color:#a00; font-size:0.95em; margin-top:8px;">PayPal is currently unavailable. Please use Crypto or contact support.</p>
+    {% endif %}
+    {% set is_natal_pdf = (items[0].reading_type == 'natal' and items[0].reading_mode == 'pdf') %}
+    {% if is_natal_pdf and nowpayments_enabled %}
+      <!-- Convert to POST to avoid GET side-effects -->
+      <form action="{{ url_for('crypto_checkout') }}" method="post" style="margin-top: 12px;">
+        <input type="hidden" name="reading" value="{{ items[0].reading_type }}" />
+        <input type="hidden" name="mode" value="{{ items[0].reading_mode }}" />
+        <input type="hidden" name="order_id" value="{{ order_id }}" />
+        <button type="submit" class="np-crypto-button" style="border:none; background:transparent; padding:0; cursor:pointer;">
+          <img src="https://nowpayments.io/images/embeds/payment-button-black.svg"
+               alt="Pay with Crypto via NOWPayments"
+               style="height:48px;"/>
+        </button>
+      </form>
+    {% elif is_natal_pdf and not nowpayments_enabled %}
+      <p style="color:#a00; font-size: 0.95em;">Crypto checkout temporarily unavailable.</p>
+    {% endif %}
   </div>
 </section>
 {% endblock %}
 {% block scripts %}
-<script src="https://www.paypal.com/sdk/js?client-id={{ paypal_client_id }}&currency=EUR"></script>
-<script>
-    paypal.Buttons({
-        createOrder: function() {
-            const orderId = "{{ order_id }}";
-            const reading = "{{ items[0].reading_type }}";
-            const mode = "{{ items[0].reading_mode }}";
-
-            return fetch(`/api/paypal/orders?order_id=${orderId}&reading=${reading}&mode=${mode}`, {
-                method: "POST"
-            })
-            .then(res => res.json())
-            .then(data => data.id);
-        },
-        onApprove: function (data) {
-          const orderId = "{{ order_id }}";
-          const reading = "{{ items[0].reading_type }}";
-          const mode = "{{ items[0].reading_mode }}";
-
-          return fetch(`/api/paypal/orders/${data.orderID}/capture?order_id=${orderId}&reading=${reading}&mode=${mode}`, {
-            method: "POST"
-          })
-          .then(async (r) => {
-            if (!r.ok) {
-              const t = await r.text().catch(() => "");
-              alert("Server error capturing payment.\n" + t);
-              return;
+{% if paypal_enabled %}
+  <script src="https://www.paypal.com/sdk/js?client-id={{ paypal_client_id }}&currency=EUR"></script>
+  <script>
+    (function(){
+      function initPayPal(){
+        if (!window.paypal || !document.getElementById('paypal-buttons')) return;
+        try{
+          window.paypal.Buttons({
+            createOrder: function() {
+              const orderId = "{{ order_id }}";
+              const reading = "{{ items[0].reading_type }}";
+              const mode = "{{ items[0].reading_mode }}";
+              return fetch(`/api/paypal/orders?order_id=${orderId}&reading=${reading}&mode=${mode}`, { method: "POST" })
+                .then(res => res.json())
+                .then(data => data.id);
+            },
+            onApprove: function (data) {
+              const orderId = "{{ order_id }}";
+              const reading = "{{ items[0].reading_type }}";
+              const mode = "{{ items[0].reading_mode }}";
+              return fetch(`/api/paypal/orders/${data.orderID}/capture?order_id=${orderId}&reading=${reading}&mode=${mode}`, { method: "POST" })
+                .then(async (r) => {
+                  if (!r.ok) {
+                    const t = await r.text().catch(() => "");
+                    alert("Server error capturing payment.\n" + t);
+                    return;
+                  }
+                  const res = await r.json().catch(() => ({}));
+                  if (res.redirect) window.location = res.redirect;
+                  else window.location = `/thankyou?status=paid&order_id=${orderId}`;
+                })
+                .catch(() => alert("Network error while capturing payment."));
+            },
+            onError: function(err) {
+              console.error(err);
+              window.location.href = "/thankyou?status=failed";
             }
-            const res = await r.json().catch(() => ({}));
-            if (res.redirect) window.location = res.redirect;
-            else window.location = `/thankyou?status=paid&order_id=${orderId}`;
-          })
-          .catch(() => alert("Network error while capturing payment."));
-        },
-        onError: function(err) {
-            console.error(err);
-            window.location.href = "/thankyou?status=failed";
-        }
-    }).render('#paypal-buttons');
-</script>
+          }).render('#paypal-buttons');
+        }catch(e){ console.error('PayPal init error', e); }
+      }
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initPayPal);
+      else initPayPal();
+    })();
+  </script>
+{% else %}
+  <script>
+    console.warn('PAYPAL_CLIENT_ID not configured; PayPal buttons disabled.');
+  </script>
+{% endif %}
 {% endblock %}
